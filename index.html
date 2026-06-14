@@ -3294,7 +3294,23 @@ async function toggleAdmin(){
 async function initFirebase(){
   document.getElementById('loading').style.display='flex';
   try{
-    const invSnap=await getDocs(collection(db,'inventario'));
+    // Disparar todas las lecturas en paralelo: en móvil cada await secuencial sumaba
+    // segundos de latencia. En modo vendedora solo se necesita inventario/promociones/empleados.
+    const pInv=getDocs(collection(db,'inventario'));
+    const pProm=getDocs(collection(db,'promociones'));
+    const pEmp=getDocs(collection(db,'empleados'));
+    const pVta=MODO_VENDEDORA?Promise.resolve(null):getDocs(collection(db,'ventas'));
+    const pCot=MODO_VENDEDORA?Promise.resolve(null):getDocs(collection(db,'cotizaciones'));
+    const pGas=MODO_VENDEDORA?Promise.resolve(null):getDocs(collection(db,'gastos'));
+    const pCom=MODO_VENDEDORA?Promise.resolve(null):getDocs(collection(db,'compras'));
+    const pCaj=MODO_VENDEDORA?Promise.resolve(null):getDocs(collection(db,'cajas'));
+    const pRh=MODO_VENDEDORA?Promise.resolve(null):getDocs(collection(db,'rrhh'));
+    const pAdm=MODO_VENDEDORA?Promise.resolve(null):getDoc(doc(db,'config','admin')).catch(()=>null);
+    const pCalc=MODO_VENDEDORA?Promise.resolve(null):getDoc(doc(db,'config','calculadora')).catch(()=>null);
+
+    const [invSnap,vtaSnap,cotSnap,promSnap,gasSnap,comSnap,cajSnap,empSnap,rhSnap,admSnap,calcSnap]=
+      await Promise.all([pInv,pVta,pCot,pProm,pGas,pCom,pCaj,pEmp,pRh,pAdm,pCalc]);
+
     if(invSnap.empty){
       const batch=writeBatch(db);
       INVENTARIO_DEFAULT.forEach(p=>batch.set(doc(db,'inventario',String(p.id)),p));
@@ -3322,88 +3338,86 @@ async function initFirebase(){
       if(cambios){await batch.commit();}
       if(prodNuevos.length)inventario=[...inventario,...prodNuevos];
     }
-    const vtaSnap=await getDocs(collection(db,'ventas'));
-    if(vtaSnap.empty){
-      const batch=writeBatch(db);
-      VENTAS_DEFAULT.forEach(v=>batch.set(doc(db,'ventas',String(v.id)),v));
-      await batch.commit();
-      ventas=[...VENTAS_DEFAULT];
-    }else{
-      ventas=vtaSnap.docs.map(d=>d.data()).filter(v=>!v.cliente.toLowerCase().includes('prueba'));
-      const ids=new Set(ventas.map(v=>String(v.id)));
-      const nuevas=VENTAS_DEFAULT.filter(v=>!ids.has(String(v.id)));
-      if(nuevas.length){
-        const batch=writeBatch(db);
-        nuevas.forEach(v=>batch.set(doc(db,'ventas',String(v.id)),v));
-        await batch.commit();
-        ventas=[...ventas,...nuevas];
-      }
-    }
     onSnapshot(collection(db,'inventario'),snap=>{
       inventario=snap.docs.map(d=>d.data());
       renderInv();
     });
-    onSnapshot(collection(db,'ventas'),snap=>{
-      ventas=snap.docs.map(d=>d.data()).filter(v=>!v.cliente.toLowerCase().includes('prueba'));
-      const tab=document.querySelector('.nav-btn.active');
-      if(tab){const t=tab.getAttribute('onclick').match(/'(\w+)'/);if(t&&t[1]==='ventas')renderVentas();}
-    });
-    // Cargar cotizaciones
-    const cotSnap=await getDocs(collection(db,'cotizaciones'));
-    cotizaciones=cotSnap.docs.map(d=>d.data());
-    onSnapshot(collection(db,'cotizaciones'),snap=>{
-      cotizaciones=snap.docs.map(d=>d.data());
-      if(document.getElementById('tab-cotizaciones').classList.contains('active'))renderCotizaciones();
-    });
+
+    if(!MODO_VENDEDORA){
+      if(vtaSnap.empty){
+        const batch=writeBatch(db);
+        VENTAS_DEFAULT.forEach(v=>batch.set(doc(db,'ventas',String(v.id)),v));
+        await batch.commit();
+        ventas=[...VENTAS_DEFAULT];
+      }else{
+        ventas=vtaSnap.docs.map(d=>d.data()).filter(v=>!v.cliente.toLowerCase().includes('prueba'));
+        const ids=new Set(ventas.map(v=>String(v.id)));
+        const nuevas=VENTAS_DEFAULT.filter(v=>!ids.has(String(v.id)));
+        if(nuevas.length){
+          const batch=writeBatch(db);
+          nuevas.forEach(v=>batch.set(doc(db,'ventas',String(v.id)),v));
+          await batch.commit();
+          ventas=[...ventas,...nuevas];
+        }
+      }
+      onSnapshot(collection(db,'ventas'),snap=>{
+        ventas=snap.docs.map(d=>d.data()).filter(v=>!v.cliente.toLowerCase().includes('prueba'));
+        const tab=document.querySelector('.nav-btn.active');
+        if(tab){const t=tab.getAttribute('onclick').match(/'(\w+)'/);if(t&&t[1]==='ventas')renderVentas();}
+      });
+      // Cargar cotizaciones
+      cotizaciones=cotSnap.docs.map(d=>d.data());
+      onSnapshot(collection(db,'cotizaciones'),snap=>{
+        cotizaciones=snap.docs.map(d=>d.data());
+        if(document.getElementById('tab-cotizaciones').classList.contains('active'))renderCotizaciones();
+      });
+    }
+
     // Cargar promociones
-    const promSnap=await getDocs(collection(db,'promociones'));
     promociones=promSnap.docs.map(d=>d.data());
     onSnapshot(collection(db,'promociones'),snap=>{
       promociones=snap.docs.map(d=>d.data());
       if(document.getElementById('tab-promociones').classList.contains('active'))renderPromociones();
     });
-    // Cargar gastos fijos y compras
-    const gasSnap=await getDocs(collection(db,'gastos'));
-    gastosFijos=gasSnap.docs.map(d=>d.data());
-    onSnapshot(collection(db,'gastos'),snap=>{
-      gastosFijos=snap.docs.map(d=>d.data());
-      if(document.getElementById('tab-finanzas').classList.contains('active'))renderFinanzas();
-    });
-    const comSnap=await getDocs(collection(db,'compras'));
-    compras=comSnap.docs.map(d=>d.data());
-    onSnapshot(collection(db,'compras'),snap=>{
-      compras=snap.docs.map(d=>d.data());
-      if(document.getElementById('tab-finanzas').classList.contains('active'))renderFinanzas();
-    });
-    // Cargar cajas
-    const cajSnap=await getDocs(collection(db,'cajas'));
-    cajas=cajSnap.docs.map(d=>d.data());
-    onSnapshot(collection(db,'cajas'),snap=>{
-      cajas=snap.docs.map(d=>d.data());
-      if(document.getElementById('tab-caja').classList.contains('active'))renderCaja();
-    });
-    // Cargar empleados y eventos RRHH
-    const empSnap=await getDocs(collection(db,'empleados'));
+
+    if(!MODO_VENDEDORA){
+      // Cargar gastos fijos y compras
+      gastosFijos=gasSnap.docs.map(d=>d.data());
+      onSnapshot(collection(db,'gastos'),snap=>{
+        gastosFijos=snap.docs.map(d=>d.data());
+        if(document.getElementById('tab-finanzas').classList.contains('active'))renderFinanzas();
+      });
+      compras=comSnap.docs.map(d=>d.data());
+      onSnapshot(collection(db,'compras'),snap=>{
+        compras=snap.docs.map(d=>d.data());
+        if(document.getElementById('tab-finanzas').classList.contains('active'))renderFinanzas();
+      });
+      // Cargar cajas
+      cajas=cajSnap.docs.map(d=>d.data());
+      onSnapshot(collection(db,'cajas'),snap=>{
+        cajas=snap.docs.map(d=>d.data());
+        if(document.getElementById('tab-caja').classList.contains('active'))renderCaja();
+      });
+    }
+
+    // Cargar empleados
     empleados=empSnap.docs.map(d=>d.data());
     onSnapshot(collection(db,'empleados'),snap=>{
       empleados=snap.docs.map(d=>d.data());
       if(document.getElementById('tab-finanzas').classList.contains('active'))renderFinanzas();
     });
-    const rhSnap=await getDocs(collection(db,'rrhh'));
-    rrhhEventos=rhSnap.docs.map(d=>d.data());
-    onSnapshot(collection(db,'rrhh'),snap=>{
-      rrhhEventos=snap.docs.map(d=>d.data());
-      if(document.getElementById('tab-finanzas').classList.contains('active'))renderFinanzas();
-    });
-    // Cargar clave de administrador y config de calculadora
-    try{
-      const admSnap=await getDoc(doc(db,'config','admin'));
-      if(admSnap.exists())_adminHash=admSnap.data().hash;
-    }catch(e){}
-    try{
-      const calcSnap=await getDoc(doc(db,'config','calculadora'));
-      if(calcSnap.exists())aplicarConfigCalculadora(calcSnap.data());
-    }catch(e){}
+
+    if(!MODO_VENDEDORA){
+      // Cargar eventos RRHH
+      rrhhEventos=rhSnap.docs.map(d=>d.data());
+      onSnapshot(collection(db,'rrhh'),snap=>{
+        rrhhEventos=snap.docs.map(d=>d.data());
+        if(document.getElementById('tab-finanzas').classList.contains('active'))renderFinanzas();
+      });
+      // Cargar clave de administrador y config de calculadora
+      if(admSnap&&admSnap.exists())_adminHash=admSnap.data().hash;
+      if(calcSnap&&calcSnap.exists())aplicarConfigCalculadora(calcSnap.data());
+    }
     pintarCandado();
   }catch(e){
     alert('Error conectando a Firebase: '+e.message);
