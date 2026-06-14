@@ -937,6 +937,26 @@ function renderInicio(){
   // Despachos de hoy
   const despHoy=ventas.filter(v=>v.desp>0&&v.fechaDesp===hoy&&(v.estado||'pendiente')!=='despachado'&&(v.estado||'pendiente')!=='cancelado');
 
+  // Próximos despachos (siguientes 6 días, sin contar hoy)
+  const limiteDespDate=new Date(fechaHoy);limiteDespDate.setDate(limiteDespDate.getDate()+6);
+  const limiteDesp=limiteDespDate.toISOString().slice(0,10);
+  const proximosDesp=ventas.filter(v=>v.desp>0&&v.fechaDesp&&v.fechaDesp>hoy&&v.fechaDesp<=limiteDesp&&(v.estado||'pendiente')!=='despachado'&&(v.estado||'pendiente')!=='cancelado').sort((a,b)=>a.fechaDesp.localeCompare(b.fechaDesp));
+
+  // Clientes con saldo pendiente
+  const saldosCli={};
+  ventas.forEach(v=>{
+    if((v.saldo||0)>0&&(v.estado||'pendiente')!=='cancelado'){
+      const k=v.cliente||'Cliente mostrador';
+      if(!saldosCli[k])saldosCli[k]={saldo:0,ultima:''};
+      saldosCli[k].saldo+=v.saldo;
+      if(v.fecha>saldosCli[k].ultima)saldosCli[k].ultima=v.fecha;
+    }
+  });
+  const topSaldos=Object.entries(saldosCli).sort((a,b)=>b[1].saldo-a[1].saldo).slice(0,5);
+
+  // Stock crítico (sin stock o bajo el mínimo)
+  const stockCritico=inventario.filter(p=>{const s=parseInt(p.stock)||0;const m=parseInt(p.minStock)||2;return s<=m;}).sort((a,b)=>(parseInt(a.stock)||0)-(parseInt(b.stock)||0)).slice(0,8);
+
   // Productos más vendidos del mes
   const prodVentas={};
   vtasMes.forEach(v=>v.items.forEach(it=>{
@@ -1019,6 +1039,31 @@ function renderInicio(){
       ${despHoy.map(v=>`<div class="item-row"><span><strong>${v.cliente}</strong> · ${[v.despCalle,v.despNumero,v.despComuna].filter(Boolean).join(', ')||'Sin dirección'}</span>
         <button onclick="cambiarEstado('${v.id}','despachado')" style="font-size:10px;padding:3px 8px;background:#dcfce7;color:#166534;border:1px solid #166534;border-radius:6px;cursor:pointer">✓ Listo</button>
       </div>`).join('')}
+    </div>`:''}
+
+    ${proximosDesp.length?`<div class="card" style="border-left:3px solid #0369a1;margin-bottom:12px">
+      <h4 style="color:#0369a1;margin-bottom:8px">📅 Próximos despachos (${proximosDesp.length})</h4>
+      ${proximosDesp.slice(0,6).map(v=>`<div class="item-row">
+        <span><strong>${v.fechaDesp.split('-').reverse().join('/')}</strong>${v.despHora&&v.despHora!=='Sin preferencia'?' · '+v.despHora:''} — ${v.cliente}</span>
+        <span class="muted" style="font-size:11px">${[v.despCalle,v.despNumero,v.despComuna].filter(Boolean).join(', ')||'Sin dirección'}</span>
+      </div>`).join('')}
+    </div>`:''}
+
+    ${topSaldos.length?`<div class="card" style="border-left:3px solid #dc2626;margin-bottom:12px">
+      <h4 style="color:#dc2626;margin-bottom:8px">⏳ Clientes con saldo pendiente</h4>
+      ${topSaldos.map(([nombre,d])=>`<div class="item-row" style="cursor:pointer" onclick="verFichaCliente('${nombre.replace(/'/g,"\\'")}')">
+        <span>${nombre} <span class="muted" style="font-size:10px">· última venta ${d.ultima.split('-').reverse().join('/')}</span></span>
+        <strong class="warn">${fmt(d.saldo)}</strong>
+      </div>`).join('')}
+    </div>`:''}
+
+    ${stockCritico.length?`<div class="card" style="border-left:3px solid #d97706;margin-bottom:12px">
+      <h4 style="color:#d97706;margin-bottom:8px">📦 Stock crítico — a reponer</h4>
+      ${stockCritico.map(p=>{const s=parseInt(p.stock)||0;return`<div class="item-row">
+        <span>${p.nombre} <span class="pill">${p.marca||''}</span></span>
+        <span style="font-weight:700;color:${s<=0?'#dc2626':'#d97706'}">${s<=0?'Sin stock':s+' u'}</span>
+      </div>`}).join('')}
+      <button class="btn btn-sec btn-sm" style="margin-top:8px;width:100%" onclick="setTab('inventario')">📋 Ver inventario</button>
     </div>`:''}
 
     <div class="card">
