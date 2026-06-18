@@ -5058,7 +5058,7 @@ void main(){
 
   /* ripple fuerte desde cursor/toque */
   float md=length(p-m);
-  vec2 rip=normalize(p-m+.001)*exp(-md*2.2)*sin(md*11.-T*5.)*.32;
+  vec2 rip=normalize(p-m+.001)*exp(-md*1.3)*sin(md*13.-T*6.)*.65;
 
   /* triple domain warp: q->r->f para maximo fluido */
   vec2 q=vec2(fbm(p+t+rip),       fbm(p+vec2(5.2,1.3)+t+rip));
