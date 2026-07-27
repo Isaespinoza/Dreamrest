@@ -1385,8 +1385,6 @@ const WIDGETS_INICIO=[
   {id:'alertas',label:'🔔 Panel de alertas'},
   {id:'stats',label:'📊 Estadísticas rápidas'},
   {id:'mejorVendedor',label:'🏆 Mejor vendedor del mes'},
-  {id:'margenBruto',label:'💰 Margen bruto del mes'},
-  {id:'ticketVendedor',label:'🎟️ Ticket promedio por vendedor'},
   {id:'mediosPago',label:'💳 Medios de pago'},
   {id:'comparativaMes',label:'📊 Comparativa con mes anterior'},
   {id:'ventasPorHora',label:'🕐 Ventas por hora del día'},
@@ -1399,9 +1397,6 @@ const WIDGETS_INICIO=[
   {id:'topProductos',label:'🏆 Más vendidos este mes'},
   {id:'sinMovimiento',label:'📭 Sin movimiento este mes'},
 ];
-// Tarjetas que revelan costo/margen o comparan el desempeño individual de cada vendedor:
-// se ocultan a quien no tenga clave de administrador, sin importar su personalización.
-const WIDGETS_INICIO_ADMIN=new Set(['margenBruto','ticketVendedor']);
 function getLayoutInicio(){
   try{
     const saved=JSON.parse(localStorage.getItem('dr_inicio_layout'));
@@ -1424,7 +1419,6 @@ function renderPersonalizarInicioList(){
   const layout=getLayoutInicio();
   const cont=document.getElementById('personalizar-inicio-list');
   cont.innerHTML=layout.map(w=>{
-    if(WIDGETS_INICIO_ADMIN.has(w.id)&&!esAdmin())return'';
     const meta=WIDGETS_INICIO.find(x=>x.id===w.id);
     if(!meta)return'';
     return`<div class="personalizar-item" draggable="true" data-id="${w.id}" style="display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;background:var(--white);cursor:grab">
@@ -1569,21 +1563,6 @@ function renderInicio(){
   const MESES_ES=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
   const mesNom=MESES_ES[parseInt(mes.slice(5))-1]+' '+mes.slice(0,4);
 
-  // Margen bruto del mes (ventas − costo de lo vendido)
-  let costoVendidoMes=0,itemsSinCostoMes=0;
-  vtasMes.forEach(v=>(v.items||[]).forEach(it=>{
-    const p=it.prodId?inventario.find(x=>String(x.id)===String(it.prodId)):null;
-    if(p&&p.costo>0)costoVendidoMes+=p.costo*it.qty;else itemsSinCostoMes++;
-    if(it.respaldoId){const r=inventario.find(x=>String(x.id)===String(it.respaldoId));if(r&&r.costo>0)costoVendidoMes+=r.costo*it.qty;}
-  }));
-  const margenMes=totalMes-costoVendidoMes;
-  const margenPct=totalMes>0?Math.round(margenMes/totalMes*100):0;
-
-  // Ticket promedio por vendedor (mes)
-  const vendStats={};
-  vtasMes.forEach(v=>{const k=v.vendedor||'—';if(!vendStats[k])vendStats[k]={total:0,count:0};vendStats[k].total+=v.total;vendStats[k].count++;});
-  const ticketVendedor=Object.entries(vendStats).map(([k,s])=>({vendedor:k,ticket:Math.round(s.total/s.count),count:s.count})).sort((a,b)=>b.ticket-a.ticket);
-
   // Ventas por hora del día (mes actual, según hora de creación)
   const porHora={};
   vtasMes.forEach(v=>{if(v.horaCreacion){const h=parseInt(v.horaCreacion.split(':')[0]);if(!isNaN(h))porHora[h]=(porHora[h]||0)+1;}});
@@ -1644,19 +1623,6 @@ function renderInicio(){
     </div>`,
     mejorVendedor:mejorVend&&mejorVend[1]>0?`<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
       <div style="background:linear-gradient(135deg,#fef3c7,#fde68a);border:1px solid #d97706;border-radius:99px;padding:6px 14px;font-size:12px;color:#92400e">🏆 Mejor vendedor del mes: <strong>${mejorVend[0]}</strong> · ${fmt(mejorVend[1])}</div>
-    </div>`:'',
-    margenBruto:`<div class="card" style="margin-bottom:12px">
-      <h4 style="margin-bottom:8px">💰 Margen bruto — ${mesNom}</h4>
-      <div style="display:flex;align-items:center;gap:12px">
-        <div style="flex:1"><div style="font-size:11px;color:var(--text3)">Ventas</div><div style="font-size:16px;font-weight:700">${fmt(totalMes)}</div></div>
-        <div style="flex:1"><div style="font-size:11px;color:var(--text3)">Costo</div><div style="font-size:16px;font-weight:700;color:#dc2626">−${fmt(costoVendidoMes)}</div></div>
-        <div style="flex:1;text-align:right"><div style="font-size:11px;color:var(--text3)">Margen</div><div style="font-size:18px;font-weight:700;color:${margenMes>=0?'#166534':'#dc2626'}">${fmt(margenMes)} <span style="font-size:11px">(${margenPct}%)</span></div></div>
-      </div>
-      ${itemsSinCostoMes>0?`<div class="muted" style="font-size:10px;margin-top:6px">${itemsSinCostoMes} ítem(s) sin costo asignado — el margen real puede variar.</div>`:''}
-    </div>`,
-    ticketVendedor:ticketVendedor.length?`<div class="card" style="margin-bottom:12px">
-      <h4 style="margin-bottom:10px">🎟️ Ticket promedio por vendedor</h4>
-      ${ticketVendedor.map(v=>`<div class="item-row"><span>${v.vendedor}</span><span><strong>${fmt(v.ticket)}</strong> <span class="muted">(${v.count})</span></span></div>`).join('')}
     </div>`:'',
     mediosPago:pagosOrd.length?`<div class="card" style="margin-bottom:12px">
       <h4 style="margin-bottom:10px">💳 ¿Cómo te pagan este mes?</h4>
@@ -1757,7 +1723,7 @@ function renderInicio(){
   };
 
   const layoutInicio=getLayoutInicio();
-  const cuerpoWidgets=layoutInicio.filter(w=>w.visible!==false&&!(WIDGETS_INICIO_ADMIN.has(w.id)&&!esAdmin())).map(w=>widgetsHtml[w.id]||'').join('');
+  const cuerpoWidgets=layoutInicio.filter(w=>w.visible!==false).map(w=>widgetsHtml[w.id]||'').join('');
 
   document.getElementById('inicio-content').innerHTML=`
     <div class="section-title">${(()=>{const h=new Date().getHours();return h<12?'Buenos días ☀️':h<20?'Buenas tardes 👋':'Buenas noches 🌙';})()} <span style="font-size:12px;font-weight:400;color:var(--text3);font-family:'Inter',sans-serif">${new Date().toLocaleDateString('es-CL',{weekday:'long',day:'numeric',month:'long'})}</span></div>
@@ -5030,8 +4996,7 @@ function initPrivacidad(){
 }
 
 function setTab(t){
-  // Resumen y Finanzas (datos sensibles) requieren modo administrador. Inicio es visible para todos
-  // (ver WIDGETS_INICIO_ADMIN para las tarjetas de Inicio que igual se ocultan sin clave de admin).
+  // Resumen y Finanzas (datos sensibles) requieren modo administrador. Inicio es visible para todos.
   if((t==='resumen'||t==='finanzas'||t==='costosfab'||t==='hermanos'||t==='cupones')&&!esAdmin()){
     requiereAdmin().then(ok=>{if(ok)setTab(t);});
     closeSidebar();
