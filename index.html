@@ -582,6 +582,30 @@ tbody tr:hover{background:var(--gold-bg)}
   </div>
 </div>
 
+<!-- Modal de confirmación genérico (reemplaza confirm() nativo) -->
+<div class="modal-bg" id="modal-confirm">
+  <div class="modal" style="max-width:380px">
+    <div id="confirm-msg" style="font-size:14px;line-height:1.5;white-space:pre-line;margin-bottom:18px"></div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-sec" style="flex:1" onclick="_resolveConfirm(false)">Cancelar</button>
+      <button class="btn" style="flex:1" id="confirm-ok-btn" onclick="_resolveConfirm(true)">Confirmar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal de formulario genérico (reemplaza prompt() nativo) -->
+<div class="modal-bg" id="modal-formdialog">
+  <div class="modal" style="max-width:420px">
+    <h3 id="formdlg-title" style="margin-bottom:14px"></h3>
+    <div id="formdlg-fields"></div>
+    <div id="formdlg-error" class="danger" style="font-size:12px;margin-bottom:8px;display:none"></div>
+    <div style="display:flex;gap:8px;margin-top:6px">
+      <button class="btn btn-sec" style="flex:1" onclick="_resolveFormDialog(null)">Cancelar</button>
+      <button class="btn" style="flex:1" onclick="_submitFormDialog()">Guardar</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal Cupón Sorpresa (se muestra al cerrar una venta que gatilla el cupón) -->
 <div class="modal-bg" id="modal-cupon-sorpresa">
   <div class="modal" style="max-width:420px">
@@ -1761,8 +1785,8 @@ function reanudarVentaPausada(i){
   updTipoVentaNV();toggleDespNV();updPagoNV();
   recalcTotalNV();
 }
-function eliminarVentaPausada(i){
-  if(!confirm('¿Eliminar esta venta pausada?'))return;
+async function eliminarVentaPausada(i){
+  if(!(await confirmDialog('¿Eliminar esta venta pausada?')))return;
   const arr=getVentasPausadas();
   arr.splice(i,1);
   setVentasPausadas(arr);
@@ -2097,7 +2121,7 @@ async function saveVentaNV(){
   if(codeCupon){
     const r=validarCupon(codeCupon,sub);
     if(!r.ok){
-      if(!confirm('⚠️ '+r.msg+'\n\n¿Guardar la venta SIN el cupón?'))return;
+      if(!(await confirmDialog('⚠️ '+r.msg+'\n\n¿Guardar la venta SIN el cupón?')))return;
     }else{cuponAplicado=r.cupon;descCupon=r.desc;}
   }
   const totalFinal=Math.max(0,sub-desc-descCupon);
@@ -2386,8 +2410,8 @@ function renderVendedores(){
 
 async function resetearInventario(){
   if(!(await requiereAdmin()))return;
-  if(!confirm('⚠️ Esto borrará TODO el inventario actual y lo cargará de nuevo con la versión correcta (respaldos completos, almohadas y camas como combo). Las ventas NO se tocan. ¿Continuar?'))return;
-  if(!confirm('¿Seguro? Esta acción no se puede deshacer. Se perderán los ajustes manuales de stock que hayas hecho.'))return;
+  if(!(await confirmDialog('⚠️ Esto borrará TODO el inventario actual y lo cargará de nuevo con la versión correcta (respaldos completos, almohadas y camas como combo). Las ventas NO se tocan. ¿Continuar?')))return;
+  if(!(await confirmDialog('¿Seguro? Esta acción no se puede deshacer. Se perderán los ajustes manuales de stock que hayas hecho.',{danger:true})))return;
   document.getElementById('loading').style.display='flex';
   try{
     // Borrar todos los productos actuales
@@ -2537,7 +2561,7 @@ async function guardarCotizacion(){
   renderCotizaciones();
 }
 async function eliminarCotizacion(id){
-  if(!confirm('¿Eliminar esta cotización?'))return;
+  if(!(await confirmDialog('¿Eliminar esta cotización?',{danger:true})))return;
   cotizaciones=cotizaciones.filter(c=>String(c.id)!==String(id));
   await delCotDB(id);
   renderCotizaciones();
@@ -2545,7 +2569,7 @@ async function eliminarCotizacion(id){
 async function convertirEnVenta(id){
   const c=cotizaciones.find(x=>String(x.id)===String(id));
   if(!c)return;
-  if(!confirm('¿Convertir esta cotización en venta? Se descontará el stock.'))return;
+  if(!(await confirmDialog('¿Convertir esta cotización en venta? Se descontará el stock.')))return;
   const v={
     id:uid(),fecha:today(),fechaDesp:today(),estado:'pendiente',
     tipo:c.tipo,cliente:c.cliente,rut:'',empresa:'',tel:c.tel,vendedor:c.vendedor,
@@ -2865,7 +2889,7 @@ async function saveHermano(){
 }
 
 async function delHermano(){
-  if(!confirm('¿Eliminar este movimiento? El stock afectado se revertirá. Esta acción no se puede deshacer.'))return;
+  if(!(await confirmDialog('¿Eliminar este movimiento? El stock afectado se revertirá. Esta acción no se puede deshacer.',{danger:true})))return;
   const m=ventasHermanos.find(x=>String(x.id)===String(editHnoId));
   if(m){
     if(m.tipo==='retiro')await restaurarStockItems(m.items||[]);
@@ -3047,7 +3071,7 @@ async function guardarPromo(){
 }
 async function eliminarPromo(id){
   if(!(await requiereAdmin()))return;
-  if(!confirm('¿Quitar esta promoción?'))return;
+  if(!(await confirmDialog('¿Quitar esta promoción?',{danger:true})))return;
   promociones=promociones.filter(p=>String(p.id)!==String(id));
   await delPromoDB(id);
   renderPromociones();
@@ -3160,23 +3184,25 @@ function renderSueldosSection(mesStr,mesNombre){
 }
 async function abrirEmpleado(id){
   const e=id?empleados.find(x=>String(x.id)===String(id)):null;
-  const nombre=prompt('Nombre del empleado (debe coincidir con el nombre de vendedor para la comisión):',e?e.nombre:'');
-  if(nombre===null||!nombre.trim())return;
-  const sueldoStr=prompt('Sueldo base mensual ($):',e?e.sueldoBase:'');
-  if(sueldoStr===null)return;
-  const sueldoBase=parseInt(String(sueldoStr).replace(/\D/g,''))||0;
+  const vals=await formDialog(e?'Editar empleado':'Nuevo empleado',[
+    {name:'nombre',label:'Nombre (debe coincidir con el vendedor de las ventas)',default:e?e.nombre:'',required:true},
+    {name:'sueldoBase',label:'Sueldo base mensual ($)',type:'number',default:e?e.sueldoBase:'',required:true},
+    {name:'diasSemana',label:'Días a la semana que trabaja (jornada de 42h semanales)',type:'number',default:e?(e.diasSemana||6):6,required:true},
+  ]);
+  if(!vals)return;
+  const nombre=String(vals.nombre).trim();
+  if(!nombre)return;
+  const sueldoBase=parseInt(vals.sueldoBase)||0;
   if(sueldoBase<=0){alert('Sueldo inválido');return;}
-  const diasStr=prompt('¿Cuántos días a la semana trabaja? (jornada de 42 horas semanales)',e?(e.diasSemana||6):'6');
-  if(diasStr===null)return;
-  const diasSemana=parseInt(diasStr)||6;
-  const nuevo={id:e?e.id:uid(),nombre:nombre.trim(),sueldoBase,horasSemana:42,diasSemana,activo:true};
+  const diasSemana=parseInt(vals.diasSemana)||6;
+  const nuevo={id:e?e.id:uid(),nombre,sueldoBase,horasSemana:42,diasSemana,activo:true};
   if(e){const i=empleados.findIndex(x=>String(x.id)===String(id));empleados[i]=nuevo;}
   else empleados.push(nuevo);
   await saveEmpleadoDB(nuevo);
   renderFinanzas();
 }
 async function eliminarEmpleado(id){
-  if(!confirm('¿Eliminar este empleado? Sus registros históricos se conservan.'))return;
+  if(!(await confirmDialog('¿Eliminar este empleado? Sus registros históricos se conservan.',{danger:true})))return;
   empleados=empleados.filter(e=>String(e.id)!==String(id));
   await delEmpleadoDB(id);
   renderFinanzas();
@@ -3333,7 +3359,7 @@ async function registrarAsistenciaPasada(empId){
 
 async function eliminarAsistencia(id){
   if(!(await requiereAdmin()))return;
-  if(!confirm('¿Eliminar este registro de asistencia?'))return;
+  if(!(await confirmDialog('¿Eliminar este registro de asistencia?',{danger:true})))return;
   asistencia=asistencia.filter(x=>String(x.id)!==String(id));
   await delAsistDB(id);
   renderAsistencia();
@@ -3398,29 +3424,29 @@ function renderAsistencia(){
 async function registrarEventoRRHH(empleadoId,tipo){
   const e=empleados.find(x=>String(x.id)===String(empleadoId));
   if(!e)return;
-  const fecha=prompt('Fecha (AAAA-MM-DD):',today());
-  if(fecha===null||!/^\d{4}-\d{2}-\d{2}$/.test(fecha.trim())){if(fecha!==null)alert('Fecha inválida');return;}
-  const ev={id:uid(),empleadoId:e.id,tipo,fecha:fecha.trim(),nota:''};
+  const fields=[{name:'fecha',label:'Fecha',type:'date',default:today(),required:true}];
+  if(tipo==='atraso')fields.push({name:'horas',label:'Horas perdidas (ej: 2 o 1.5)',type:'number',step:'0.5',required:true});
+  if(tipo==='adelanto'||tipo==='bono')fields.push({name:'monto',label:'Monto ($)',type:'number',required:true});
+  fields.push({name:'nota',label:'Nota / motivo (opcional)',type:'text'});
+  const vals=await formDialog('Registrar '+tipo,fields);
+  if(!vals)return;
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(String(vals.fecha).trim())){alert('Fecha inválida');return;}
+  const ev={id:uid(),empleadoId:e.id,tipo,fecha:String(vals.fecha).trim(),nota:''};
   if(tipo==='atraso'){
-    const h=prompt('¿Cuántas horas perdió? (ej: 2 o 1.5)');
-    if(h===null)return;
-    ev.horas=parseFloat(String(h).replace(',','.'))||0;
+    ev.horas=parseFloat(vals.horas)||0;
     if(ev.horas<=0){alert('Horas inválidas');return;}
   }
   if(tipo==='adelanto'||tipo==='bono'){
-    const m=prompt('Monto ($):');
-    if(m===null)return;
-    ev.monto=parseInt(String(m).replace(/\D/g,''))||0;
+    ev.monto=parseInt(vals.monto)||0;
     if(ev.monto<=0){alert('Monto inválido');return;}
   }
-  const nota=prompt('Nota / motivo (opcional):');
-  if(nota)ev.nota=nota.trim();
+  if(vals.nota)ev.nota=String(vals.nota).trim();
   rrhhEventos.push(ev);
   await saveRRHHDB(ev);
   renderFinanzas();
 }
 async function eliminarEventoRRHH(id){
-  if(!confirm('¿Eliminar este registro?'))return;
+  if(!(await confirmDialog('¿Eliminar este registro?',{danger:true})))return;
   rrhhEventos=rrhhEventos.filter(e=>String(e.id)!==String(id));
   await delRRHHDB(id);
   renderFinanzas();
@@ -3514,11 +3540,13 @@ function renderCaja(){
   cont.innerHTML=html;
 }
 async function abrirCaja(){
-  const montoStr=prompt('💵 ¿Con cuánto efectivo abre la caja hoy?');
-  if(montoStr===null)return;
-  const monto=parseInt(String(montoStr).replace(/\D/g,''))||0;
-  const vendedor=prompt('¿Quién abre la caja?','Isaías');
-  if(vendedor===null)return;
+  const vals=await formDialog('💵 Abrir caja',[
+    {name:'monto',label:'¿Con cuánto efectivo abre la caja hoy?',type:'number',required:true},
+    {name:'vendedor',label:'¿Quién abre la caja?',type:'select',options:listaVendedores(),default:'Isaías'},
+  ]);
+  if(!vals)return;
+  const monto=parseInt(vals.monto)||0;
+  const vendedor=vals.vendedor;
   const ahora=new Date();
   const cj={
     id:'caja_'+today(),
@@ -3537,11 +3565,14 @@ async function abrirCaja(){
 async function agregarMovimientoCaja(tipo){
   const caja=cajaDeHoy();
   if(!caja||caja.cerrada)return;
-  const motivo=prompt(tipo==='ingreso'?'Motivo del ingreso (ej: vuelto traído, abono cliente):':'Motivo del retiro (ej: pago flete, compra insumos):');
-  if(motivo===null||!motivo.trim())return;
-  const montoStr=prompt('Monto ($):');
-  if(montoStr===null)return;
-  const monto=parseInt(String(montoStr).replace(/\D/g,''))||0;
+  const vals=await formDialog(tipo==='ingreso'?'Ingreso de caja':'Retiro de caja',[
+    {name:'motivo',label:tipo==='ingreso'?'Motivo del ingreso (ej: vuelto traído, abono cliente)':'Motivo del retiro (ej: pago flete, compra insumos)',required:true},
+    {name:'monto',label:'Monto ($)',type:'number',required:true},
+  ]);
+  if(!vals)return;
+  const motivo=String(vals.motivo).trim();
+  if(!motivo)return;
+  const monto=parseInt(vals.monto)||0;
   if(monto<=0){alert('Monto inválido');return;}
   const ahora=new Date();
   if(!caja.movimientos)caja.movimientos=[];
@@ -3557,15 +3588,15 @@ async function cerrarCaja(){
   const ingresos=movs.filter(m=>m.tipo==='ingreso').reduce((a,m)=>a+m.monto,0);
   const retiros=movs.filter(m=>m.tipo==='retiro').reduce((a,m)=>a+m.monto,0);
   const esperado=(caja.montoInicial||0)+efectivoVentas+ingresos-retiros;
-  const contadoStr=prompt(`🔒 Cierre de caja\n\nDebería haber: ${fmt(esperado)}\n\n¿Cuánto efectivo contaste?`);
-  if(contadoStr===null)return;
-  const contado=parseInt(String(contadoStr).replace(/\D/g,''))||0;
+  const vals=await formDialog('🔒 Cierre de caja',[
+    {name:'info',type:'info',label:`Debería haber: <strong>${fmt(esperado)}</strong>`},
+    {name:'contado',label:'¿Cuánto efectivo contaste?',type:'number',required:true},
+    {name:'notas',label:'Nota del cierre (opcional)'},
+  ]);
+  if(!vals)return;
+  const contado=parseInt(vals.contado)||0;
   const dif=contado-esperado;
-  let notas='';
-  if(dif!==0){
-    const n=prompt(`${dif>0?'Sobran':'Faltan'} ${fmt(Math.abs(dif))}. ¿Alguna nota del cierre? (opcional)`);
-    if(n)notas=n.trim();
-  }
+  const notas=vals.notas?String(vals.notas).trim():'';
   const ahora=new Date();
   caja.cerrada=true;
   caja.horaCierre=`${String(ahora.getHours()).padStart(2,'0')}:${String(ahora.getMinutes()).padStart(2,'0')}`;
@@ -3763,20 +3794,23 @@ function renderFinanzas(){
 // --- Gastos fijos ---
 async function abrirGastoFijo(id){
   const g=id?gastosFijos.find(x=>String(x.id)===String(id)):null;
-  const nombre=prompt('Nombre del gasto fijo (ej: Arriendo, Luz, Sueldo Daniela):',g?g.nombre:'');
-  if(nombre===null||!nombre.trim())return;
-  const montoStr=prompt('Monto mensual ($):',g?g.monto:'');
-  if(montoStr===null)return;
-  const monto=parseInt(String(montoStr).replace(/\D/g,''))||0;
+  const vals=await formDialog(g?'Editar gasto fijo':'Nuevo gasto fijo',[
+    {name:'nombre',label:'Nombre (ej: Arriendo, Luz, Sueldo Daniela)',default:g?g.nombre:'',required:true},
+    {name:'monto',label:'Monto mensual ($)',type:'number',default:g?g.monto:'',required:true},
+  ]);
+  if(!vals)return;
+  const nombre=String(vals.nombre).trim();
+  if(!nombre)return;
+  const monto=parseInt(vals.monto)||0;
   if(monto<=0){alert('Monto inválido');return;}
-  const nuevo={id:g?g.id:uid(),nombre:nombre.trim(),monto};
+  const nuevo={id:g?g.id:uid(),nombre,monto};
   if(g){const i=gastosFijos.findIndex(x=>String(x.id)===String(id));gastosFijos[i]=nuevo;}
   else gastosFijos.push(nuevo);
   await saveGastoDB(nuevo);
   renderFinanzas();
 }
 async function eliminarGastoFijo(id){
-  if(!confirm('¿Eliminar este gasto fijo?'))return;
+  if(!(await confirmDialog('¿Eliminar este gasto fijo?',{danger:true})))return;
   gastosFijos=gastosFijos.filter(g=>String(g.id)!==String(id));
   await delGastoDB(id);
   renderFinanzas();
@@ -3867,7 +3901,7 @@ async function guardarCompra(){
   renderFinanzas();
 }
 async function eliminarCompra(id){
-  if(!confirm('¿Eliminar esta compra?'))return;
+  if(!(await confirmDialog('¿Eliminar esta compra?',{danger:true})))return;
   compras=compras.filter(g=>String(g.id)!==String(id));
   await delCompraDB(id);
   renderFinanzas();
@@ -4192,7 +4226,7 @@ function renderCalculadora(){
     html+=`<div class="card"><h4 style="margin-bottom:10px">🧵 Otros insumos</h4><div class="row3">
       ${otros.map(([k,l])=>`<div class="field"><label>${l}</label><input type="number" value="${insumos[k]}" onchange="updInsumoCalc('${k}',this.value)"></div>`).join('')}
     </div></div>`;
-    html+=`<button class="btn btn-sec" style="width:100%" onclick="if(confirm('¿Volver a los valores originales de todos los insumos?')){insumos=JSON.parse(JSON.stringify(INSUMOS_DEFAULT));guardarConfigCalculadora();renderCalculadora();}">↩️ Restaurar valores originales</button>`;
+    html+=`<button class="btn btn-sec" style="width:100%" onclick="restaurarInsumosDefault()">↩️ Restaurar valores originales</button>`;
   }else{
     // Tabla de costos
     html+=`<div class="help">Costo de fabricación con IVA según tus insumos actuales. Comparado con el costo guardado en el inventario y el precio minorista — si el margen está en rojo, estás vendiendo a pérdida.</div>`;
@@ -4221,8 +4255,14 @@ function renderCalculadora(){
   }
   cont.innerHTML=html;
 }
+async function restaurarInsumosDefault(){
+  if(!(await confirmDialog('¿Volver a los valores originales de todos los insumos?')))return;
+  insumos=JSON.parse(JSON.stringify(INSUMOS_DEFAULT));
+  guardarConfigCalculadora();
+  renderCalculadora();
+}
 async function aplicarCostosInventario(){
-  if(!confirm('¿Actualizar el costo de los colchones DreamRest en el inventario con los valores calculados?'))return;
+  if(!(await confirmDialog('¿Actualizar el costo de los colchones DreamRest en el inventario con los valores calculados?')))return;
   let n=0;
   for(const[mKey,tams]of Object.entries(MAPA_COSTO_PROD)){
     for(const[tamKey,prodId]of Object.entries(tams)){
@@ -4326,7 +4366,7 @@ async function ofrecerReactivarCupon(v){
   if(!v||!v.cupon)return;
   const c=cupones.find(x=>String(x.id)===String(v.cupon.id));
   if(!c||!c.usado||String(c.usadoVentaId)!==String(v.id))return;
-  if(confirm('Esta venta usó el cupón '+c.codigo+'. ¿Reactivarlo para que pueda usarse de nuevo?')){
+  if(await confirmDialog('Esta venta usó el cupón '+c.codigo+'. ¿Reactivarlo para que pueda usarse de nuevo?')){
     c.usado=false;c.usadoFecha=null;c.usadoVentaId=null;
     await saveCuponDB(c);
     toast('🎟️ Cupón '+c.codigo+' reactivado');
@@ -4337,7 +4377,7 @@ async function ofrecerEliminarCuponGenerado(v){
   if(!v||!v.cuponSorpresa)return;
   const c=cupones.find(x=>String(x.ventaOrigenId)===String(v.id)&&!x.usado);
   if(!c)return;
-  if(confirm('Esta venta generó el cupón sorpresa '+c.codigo+' (aún sin usar). ¿Eliminarlo también?')){
+  if(await confirmDialog('Esta venta generó el cupón sorpresa '+c.codigo+' (aún sin usar). ¿Eliminarlo también?')){
     cupones=cupones.filter(x=>String(x.id)!==String(c.id));
     await delCuponDB(c.id);
   }
@@ -4383,7 +4423,7 @@ async function generarLoteCupones(){
   if(monto<=0){alert('Ingresa el monto de descuento del cupón');return;}
   if(!vence){alert('Ingresa la fecha de vencimiento');return;}
   if(vence<today()){alert('La fecha de vencimiento no puede ser pasada');return;}
-  if(!confirm('Se generarán '+cant+' cupones de '+fmt(monto)+' que vencen el '+vence.split('-').reverse().join('/')+(minC>0?' con compra mínima de '+fmt(minC):'')+'. ¿Continuar?'))return;
+  if(!(await confirmDialog('Se generarán '+cant+' cupones de '+fmt(monto)+' que vencen el '+vence.split('-').reverse().join('/')+(minC>0?' con compra mínima de '+fmt(minC):'')+'. ¿Continuar?')))return;
   const batch=writeBatch(db);
   for(let i=0;i<cant;i++){
     // uid() usa Date.now(): el sufijo evita ids repetidos dentro del mismo milisegundo
@@ -4536,11 +4576,14 @@ function pintarCandado(){
   if(b)b.title=esAdmin()?'Administrador activo (toca para bloquear)':'Modo administrador';
 }
 async function crearClaveAdmin(){
-  const c1=prompt('🔐 Aún no tienes clave de administrador.\n\nCrea una clave (mínimo 4 caracteres):');
-  if(c1===null)return false;
+  const vals=await formDialog('🔐 Crear clave de administrador',[
+    {name:'info',type:'info',label:'Aún no tienes clave de administrador. Crea una (mínimo 4 caracteres).'},
+    {name:'c1',label:'Clave',type:'password',required:true},
+    {name:'c2',label:'Repite la clave',type:'password',required:true},
+  ]);
+  if(!vals)return false;
+  const c1=vals.c1,c2=vals.c2;
   if(!c1||c1.length<4){alert('La clave debe tener al menos 4 caracteres');return false;}
-  const c2=prompt('Repite la clave para confirmar:');
-  if(c2===null)return false;
   if(c1!==c2){alert('Las claves no coinciden. Intenta de nuevo.');return false;}
   const h=await hashClave(c1);
   await setDoc(doc(db,'config','admin'),{hash:h});
@@ -4560,9 +4603,11 @@ async function requiereAdmin(){
     }catch(e){}
   }
   if(!_adminHash)return await crearClaveAdmin();
-  const clave=prompt('🔐 Esta acción requiere la clave de administrador:');
-  if(clave===null)return false;
-  const h=await hashClave(clave);
+  const vals=await formDialog('🔐 Clave de administrador',[
+    {name:'clave',label:'Esta acción requiere la clave de administrador',type:'password',required:true},
+  ]);
+  if(!vals)return false;
+  const h=await hashClave(vals.clave);
   if(h===_adminHash){
     sessionStorage.setItem('dr_admin','1');
     pintarCandado();
@@ -4573,7 +4618,7 @@ async function requiereAdmin(){
 }
 async function toggleAdmin(){
   if(esAdmin()){
-    if(confirm('¿Bloquear el modo administrador en este equipo?')){
+    if(await confirmDialog('¿Bloquear el modo administrador en este equipo?')){
       sessionStorage.removeItem('dr_admin');
       pintarCandado();
       // Si está en una pestaña protegida, volver a Ventas
@@ -4829,6 +4874,72 @@ function setTab(t){
 // =========== MODALS ===========
 function openModal(id){document.getElementById(id).classList.add('show')}
 function closeModal(id){document.getElementById(id).classList.remove('show')}
+
+// =========== DIÁLOGOS GENÉRICOS (reemplazan confirm()/prompt() nativos) ===========
+let _confirmResolve=null;
+function confirmDialog(msg,opts={}){
+  return new Promise(resolve=>{
+    _confirmResolve=resolve;
+    document.getElementById('confirm-msg').textContent=msg;
+    const okBtn=document.getElementById('confirm-ok-btn');
+    okBtn.textContent=opts.okText||'Confirmar';
+    okBtn.style.background=opts.danger?'#dc2626':'';
+    openModal('modal-confirm');
+  });
+}
+function _resolveConfirm(val){
+  closeModal('modal-confirm');
+  if(_confirmResolve){const r=_confirmResolve;_confirmResolve=null;r(val);}
+}
+
+let _formDlgResolve=null,_formDlgFields=null;
+function formDialog(title,fields){
+  return new Promise(resolve=>{
+    _formDlgResolve=resolve;
+    _formDlgFields=fields;
+    document.getElementById('formdlg-title').textContent=title;
+    document.getElementById('formdlg-error').style.display='none';
+    document.getElementById('formdlg-fields').innerHTML=fields.map(f=>{
+      if(f.type==='info'){
+        return`<div class="help" style="margin-bottom:12px">${f.label}</div>`;
+      }
+      if(f.type==='select'){
+        return`<div class="field"><label>${f.label}</label><select id="fdlg-${f.name}">${(f.options||[]).map(o=>`<option value="${o}" ${o===f.default?'selected':''}>${o}</option>`).join('')}</select></div>`;
+      }
+      if(f.type==='textarea'){
+        return`<div class="field"><label>${f.label}</label><textarea id="fdlg-${f.name}" placeholder="${f.placeholder||''}" rows="3">${f.default||''}</textarea></div>`;
+      }
+      return`<div class="field"><label>${f.label}</label><input type="${f.type||'text'}" id="fdlg-${f.name}" value="${f.default!=null?f.default:''}" placeholder="${f.placeholder||''}" ${f.step?`step="${f.step}"`:''}></div>`;
+    }).join('');
+    openModal('modal-formdialog');
+    setTimeout(()=>{const first=document.querySelector('#formdlg-fields input,#formdlg-fields select');if(first)first.focus();},50);
+  });
+}
+function _submitFormDialog(){
+  const vals={};
+  for(const f of _formDlgFields){
+    if(f.type==='info')continue;
+    const el=document.getElementById('fdlg-'+f.name);
+    let v=el.value;
+    if(f.type==='number')v=v===''?null:parseFloat(v);
+    if(f.required&&(v===''||v==null||Number.isNaN(v))){
+      const err=document.getElementById('formdlg-error');
+      err.textContent='⚠ Completa: '+f.label;
+      err.style.display='block';
+      el.focus();
+      return;
+    }
+    vals[f.name]=v;
+  }
+  closeModal('modal-formdialog');
+  const r=_formDlgResolve;_formDlgResolve=null;
+  if(r)r(vals);
+}
+function _resolveFormDialog(val){
+  closeModal('modal-formdialog');
+  const r=_formDlgResolve;_formDlgResolve=null;
+  if(r)r(val);
+}
 
 // Re-renderiza la pestaña que está abierta ahora mismo (usado por la sync en tiempo real)
 function refrescarVistaActiva(){
@@ -5223,7 +5334,7 @@ async function saveProd(){
 }
 
 async function delProd(){
-  if(!confirm('¿Eliminar este producto del inventario?'))return;
+  if(!(await confirmDialog('¿Eliminar este producto del inventario?',{danger:true})))return;
   inventario=inventario.filter(p=>String(p.id)!==String(editProdId));
   await delProdDB(editProdId);
   closeModal('modal-prod');
@@ -5234,7 +5345,7 @@ async function delProdDirect(id){
   if(!(await requiereAdmin()))return;
   const p=inventario.find(x=>String(x.id)===String(id));
   if(!p)return;
-  if(!confirm('¿Eliminar "'+p.nombre+'" del inventario?'))return;
+  if(!(await confirmDialog('¿Eliminar "'+p.nombre+'" del inventario?',{danger:true})))return;
   inventario=inventario.filter(x=>String(x.id)!==String(id));
   await delProdDB(id);
   renderInv();
@@ -6138,7 +6249,7 @@ async function editVenta(id){
 
 async function delVenta(){
   if(!(await requiereAdmin()))return;
-  if(!confirm('¿Eliminar esta venta? Los productos volverán al stock. Esta acción no se puede deshacer.'))return;
+  if(!(await confirmDialog('¿Eliminar esta venta? Los productos volverán al stock. Esta acción no se puede deshacer.',{danger:true})))return;
   const v=ventas.find(x=>String(x.id)===String(editVentaId));
   if(v&&!v.stockDevuelto)await restaurarStockItems(v.items||[]);
   // Cupones: ofrecer reactivar el cupón usado y eliminar el sorpresa que generó (si sigue sin usar)
@@ -6351,7 +6462,7 @@ async function cambiarEstadoDetalle(id,nuevoEstado){
   const estadoPrev=v.estado||'pendiente';
   // Al cancelar: devolver productos al stock. Al revertir la cancelación: descontarlos de nuevo.
   if(nuevoEstado==='cancelado'&&estadoPrev!=='cancelado'&&!v.stockDevuelto){
-    if(confirm('¿Devolver los productos de esta venta al stock?')){
+    if(await confirmDialog('¿Devolver los productos de esta venta al stock?')){
       await restaurarStockItems(v.items||[]);
       v.stockDevuelto=true;
     }
@@ -6464,7 +6575,7 @@ async function abonarSaldo(id){
 async function pagarTotalSaldo(id){
   const v=ventas.find(x=>String(x.id)===String(id));
   if(!v)return;
-  if(!confirm(`¿Marcar como pagado el saldo de ${fmt(v.saldo)} de ${v.cliente}?`))return;
+  if(!(await confirmDialog(`¿Marcar como pagado el saldo de ${fmt(v.saldo)} de ${v.cliente}?`)))return;
   const pago=(document.getElementById('sp-pago-'+id)||{}).value||'Efectivo';
   const resto=Math.max(0,(parseInt(v.total)||0)-(parseInt(v.cancelado)||0));
   if(resto>0)_pushAbono(v,resto,pago);
@@ -6495,9 +6606,11 @@ async function editarAbono(id,idx){
   if(!v||!Array.isArray(v.abonos)||!v.abonos[idx])return;
   const ab=v.abonos[idx];
   const inicial=Math.max(0,(parseInt(v.cancelado)||0)-v.abonos.reduce((a,x)=>a+(parseInt(x.monto)||0),0));
-  const nuevo=prompt('Nuevo monto del abono ('+(ab.pago||'—')+' · '+(ab.fecha||'')+'):',ab.monto);
-  if(nuevo===null)return;
-  const monto=parseInt(nuevo)||0;
+  const vals=await formDialog('Editar abono',[
+    {name:'monto',label:'Nuevo monto del abono ('+(ab.pago||'—')+' · '+(ab.fecha||'')+')',type:'number',default:ab.monto,required:true},
+  ]);
+  if(!vals)return;
+  const monto=parseInt(vals.monto)||0;
   if(monto<=0){alert('Monto inválido. Para eliminarlo usá 🗑️');return;}
   ab.monto=monto;
   _recalcAbonos(v,inicial);
@@ -6508,7 +6621,7 @@ async function borrarAbono(id,idx){
   const v=ventas.find(x=>String(x.id)===String(id));
   if(!v||!Array.isArray(v.abonos)||!v.abonos[idx])return;
   const ab=v.abonos[idx];
-  if(!confirm('¿Borrar el abono de '+fmt(ab.monto)+' ('+(ab.pago||'—')+')?'))return;
+  if(!(await confirmDialog('¿Borrar el abono de '+fmt(ab.monto)+' ('+(ab.pago||'—')+')?',{danger:true})))return;
   const inicial=Math.max(0,(parseInt(v.cancelado)||0)-v.abonos.reduce((a,x)=>a+(parseInt(x.monto)||0),0));
   v.abonos.splice(idx,1);
   _recalcAbonos(v,inicial);
@@ -6990,6 +7103,7 @@ Object.assign(window,{
   renderCotizaciones,nuevaCotizacion,editarCotizacion,addCotItem,rmCotItem,updCotItem,renderCotItems,
   autocompleteCot,selCotProd,guardarCotizacion,eliminarCotizacion,convertirEnVenta,imprimirCotizacion,
   exportInv,exportVentas,openModal,closeModal,
+  confirmDialog,formDialog,_resolveConfirm,_resolveFormDialog,_submitFormDialog,
   abrirImportar,handleImportDrop,handleImportSelect,confirmarImport,descargarPlantilla,cargarHojaImport,
   pausarVentaNV,reanudarVentaPausada,eliminarVentaPausada,updPagoNV,recalcMixtoNV,calcDescuentoNV,
   renderPromociones,autocompletePromoProd,selPromoProd,guardarPromo,eliminarPromo,renderClientes,
@@ -6997,7 +7111,7 @@ Object.assign(window,{
   renderFinanzas,abrirGastoFijo,eliminarGastoFijo,abrirCompra,guardarCompra,eliminarCompra,
   renderCaja,abrirCaja,cerrarCaja,agregarMovimientoCaja,
   abrirEmpleado,eliminarEmpleado,registrarEventoRRHH,eliminarEventoRRHH,
-  renderCalculadora,updInsumoCalc,aplicarCostosInventario,guardarConfigCalculadora,
+  renderCalculadora,updInsumoCalc,aplicarCostosInventario,guardarConfigCalculadora,restaurarInsumosDefault,
   handleFotoCompra,calcSugerenciaCompra,verFotoCompra,
   abrirReposicion,renderReposicion,copiarListaReposicion,exportReposicion,
   imprimirVenta,descargarPedidoHTML,
