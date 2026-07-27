@@ -97,6 +97,7 @@ body.dark{
 .hdr-right{display:flex;align-items:center;gap:8px}
 .hdr-sync{background:rgba(255,255,255,.15);border:none;color:#fff;width:36px;height:36px;border-radius:8px;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;transition:background .2s}
 .hdr-sync:hover{background:rgba(255,255,255,.25)}
+.hdr-sync.active{background:var(--gold,#c9a227);color:#1a1a1a}
 
 /* ===== MODO VENDEDORA (link de solo Nueva Venta) ===== */
 .modo-vendedora-badge{display:none;font-size:11px;font-weight:600;background:rgba(255,255,255,.18);padding:5px 12px;border-radius:99px;color:#fff;white-space:nowrap}
@@ -333,6 +334,7 @@ tbody tr:hover{background:var(--gold-bg)}
     <div class="hdr-right">
       <button class="hdr-sync" id="admin-btn" onclick="toggleAdmin()" title="Modo administrador"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></button>
       <button class="hdr-sync" id="theme-btn" onclick="toggleTheme()" title="Modo oscuro/claro"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></button>
+      <button class="hdr-sync" id="privacy-btn" onclick="togglePrivacidad()" title="Ocultar montos"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
       <button class="hdr-sync" id="btn-venta-rapida" onclick="openVenta()" title="Nueva venta rápida"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
       <button class="hdr-sync" id="notif-btn" onclick="solicitarNotificaciones()" title="Notificaciones"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></button>
     </div>
@@ -1279,7 +1281,8 @@ let cupones=[];
 let cuponesConfig={activo:false,monto:150000,tipoDesc:'$',valor:10000,dias:30};
 
 // =========== HELPERS ===========
-const fmt=n=>'$'+Math.round(n||0).toLocaleString('es-CL');
+let montosOcultos=false;
+const fmt=n=>montosOcultos?'$••••••':'$'+Math.round(n||0).toLocaleString('es-CL');
 const MESES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 // Fecha local (Chile), NO UTC: toISOString() adelanta el día después de las ~20:00 hora local
 const isoLocal=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
@@ -4669,6 +4672,7 @@ async function initFirebase(){
   }
   document.getElementById('loading').style.display='none';
   initTheme();
+  initPrivacidad();
   renderInicio();
   renderVentas();
   actualizarBadges();
@@ -4689,6 +4693,26 @@ function initTheme(){
   let pref='light';
   try{pref=localStorage.getItem('dr_theme')||'light';}catch(e){}
   if(pref==='dark'){document.body.classList.add('dark');const b=document.getElementById('theme-btn');if(b)b.textContent='☀️';}
+}
+
+function togglePrivacidad(){
+  montosOcultos=!montosOcultos;
+  try{localStorage.setItem('dr_privacidad',montosOcultos?'1':'0');}catch(e){}
+  pintarBotonPrivacidad();
+  refrescarVistaActiva();
+}
+function pintarBotonPrivacidad(){
+  const b=document.getElementById('privacy-btn');
+  if(!b)return;
+  b.classList.toggle('active',montosOcultos);
+  b.title=montosOcultos?'Mostrar montos':'Ocultar montos';
+  b.innerHTML=montosOcultos
+    ?'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a21.8 21.8 0 0 1 5.06-6.94M9.9 4.24A10.94 10.94 0 0 1 12 4c7 0 11 8 11 8a21.8 21.8 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>'
+    :'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+}
+function initPrivacidad(){
+  try{montosOcultos=localStorage.getItem('dr_privacidad')==='1';}catch(e){montosOcultos=false;}
+  pintarBotonPrivacidad();
 }
 
 function setTab(t){
@@ -6826,7 +6850,7 @@ const renderInvDeb=debounce(renderInv,180);
 
 // Exponer todas las funciones al scope global (requerido por type="module")
 Object.assign(window,{
-  setTab,openSidebar,closeSidebar,toggleTheme,
+  setTab,openSidebar,closeSidebar,toggleTheme,togglePrivacidad,
   openProd,editProd,saveProd,delProd,delProdDirect,
   openVenta,saveVenta,editVenta,delVenta,viewVenta,
   addItem,rmItem,selProd,updItem,recalcTotal,updTipoVenta,toggleDespCampos,sincFechaDesp,
