@@ -98,6 +98,7 @@ body.dark{
 .hdr-sync{background:rgba(255,255,255,.15);border:none;color:#fff;width:36px;height:36px;border-radius:8px;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;transition:background .2s}
 .hdr-sync:hover{background:rgba(255,255,255,.25)}
 .hdr-sync.active{background:var(--gold,#c9a227);color:#1a1a1a}
+.personalizar-item.dragging{opacity:.4}
 
 /* ===== MODO VENDEDORA (link de solo Nueva Venta) ===== */
 .modo-vendedora-badge{display:none;font-size:11px;font-weight:600;background:rgba(255,255,255,.18);padding:5px 12px;border-radius:99px;color:#fff;white-space:nowrap}
@@ -579,6 +580,22 @@ tbody tr:hover{background:var(--gold-bg)}
       <button class="btn btn-sec btn-sm" onclick="exportReposicion()">⬇️ Descargar CSV</button>
     </div>
     <div id="reposicion-list"></div>
+  </div>
+</div>
+
+<!-- Modal Personalizar Inicio -->
+<div class="modal-bg" id="modal-personalizar-inicio">
+  <div class="modal" style="max-width:460px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <h3 style="margin:0">⚙️ Personalizar Inicio</h3>
+      <button class="btn btn-sec btn-sm" onclick="closeModal('modal-personalizar-inicio')">✕ Cerrar</button>
+    </div>
+    <div class="muted" style="font-size:12px;margin-bottom:12px">Activa, desactiva y arrastra ⠿ para ordenar las tarjetas de tu Inicio.</div>
+    <div id="personalizar-inicio-list"></div>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button class="btn btn-sec" style="flex:1" onclick="restaurarLayoutInicio()">↩️ Restaurar orden</button>
+      <button class="btn" style="flex:1" onclick="guardarPersonalizarInicio()">Guardar</button>
+    </div>
   </div>
 </div>
 
@@ -1362,6 +1379,97 @@ const horaActual=()=>{const d=new Date();return String(d.getHours()).padStart(2,
 function uid(){return'id'+Date.now()+Math.floor(Math.random()*1000);}
 
 // =========== INICIO ===========
+// =========== INICIO PERSONALIZABLE ===========
+const WIDGETS_INICIO=[
+  {id:'suenos',label:'😴 Sueños creados (especial)'},
+  {id:'alertas',label:'🔔 Panel de alertas'},
+  {id:'stats',label:'📊 Estadísticas rápidas'},
+  {id:'mejorVendedor',label:'🏆 Mejor vendedor del mes'},
+  {id:'margenBruto',label:'💰 Margen bruto del mes'},
+  {id:'ticketVendedor',label:'🎟️ Ticket promedio por vendedor'},
+  {id:'mediosPago',label:'💳 Medios de pago'},
+  {id:'comparativaMes',label:'📊 Comparativa con mes anterior'},
+  {id:'ventasPorHora',label:'🕐 Ventas por hora del día'},
+  {id:'clientesNuevos',label:'🙋 Clientes nuevos vs recurrentes'},
+  {id:'despachosHoy',label:'🚚 Despachos de hoy'},
+  {id:'proximosDespachos',label:'📅 Próximos despachos'},
+  {id:'saldosPendientes',label:'⏳ Clientes con saldo pendiente'},
+  {id:'stockCritico',label:'📦 Stock crítico'},
+  {id:'ventas14dias',label:'📈 Ventas últimos 14 días'},
+  {id:'topProductos',label:'🏆 Más vendidos este mes'},
+  {id:'sinMovimiento',label:'📭 Sin movimiento este mes'},
+];
+function getLayoutInicio(){
+  try{
+    const saved=JSON.parse(localStorage.getItem('dr_inicio_layout'));
+    if(Array.isArray(saved)&&saved.length){
+      const ids=new Set(saved.map(w=>w.id));
+      const faltantes=WIDGETS_INICIO.filter(w=>!ids.has(w.id)).map(w=>({id:w.id,visible:true}));
+      return[...saved,...faltantes];
+    }
+  }catch(e){}
+  return WIDGETS_INICIO.map(w=>({id:w.id,visible:true}));
+}
+function guardarLayoutInicio(layout){
+  try{localStorage.setItem('dr_inicio_layout',JSON.stringify(layout));}catch(e){}
+}
+function abrirPersonalizarInicio(){
+  openModal('modal-personalizar-inicio');
+  renderPersonalizarInicioList();
+}
+function renderPersonalizarInicioList(){
+  const layout=getLayoutInicio();
+  const cont=document.getElementById('personalizar-inicio-list');
+  cont.innerHTML=layout.map(w=>{
+    const meta=WIDGETS_INICIO.find(x=>x.id===w.id);
+    if(!meta)return'';
+    return`<div class="personalizar-item" draggable="true" data-id="${w.id}" style="display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;background:var(--white);cursor:grab">
+      <span style="color:var(--text3)">⠿</span>
+      <label style="flex:1;display:flex;align-items:center;gap:8px;margin:0;text-transform:none;font-size:13px;font-weight:500;color:var(--text)">
+        <input type="checkbox" style="width:auto" ${w.visible!==false?'checked':''}> ${meta.label}
+      </label>
+    </div>`;
+  }).join('');
+  wireDragInicio();
+}
+function wireDragInicio(){
+  const cont=document.getElementById('personalizar-inicio-list');
+  let dragEl=null;
+  cont.querySelectorAll('.personalizar-item').forEach(el=>{
+    el.addEventListener('dragstart',()=>{dragEl=el;el.classList.add('dragging');});
+    el.addEventListener('dragend',()=>{el.classList.remove('dragging');});
+    el.addEventListener('dragover',e=>{
+      e.preventDefault();
+      if(!dragEl)return;
+      const after=_dragAfterElementInicio(cont,e.clientY);
+      if(after==null)cont.appendChild(dragEl);
+      else cont.insertBefore(dragEl,after);
+    });
+  });
+}
+function _dragAfterElementInicio(cont,y){
+  const els=[...cont.querySelectorAll('.personalizar-item:not(.dragging)')];
+  return els.reduce((closest,child)=>{
+    const box=child.getBoundingClientRect();
+    const offset=y-box.top-box.height/2;
+    if(offset<0&&offset>closest.offset)return{offset,element:child};
+    return closest;
+  },{offset:-Infinity}).element;
+}
+function guardarPersonalizarInicio(){
+  const cont=document.getElementById('personalizar-inicio-list');
+  const items=[...cont.querySelectorAll('.personalizar-item')];
+  const layout=items.map(el=>({id:el.dataset.id,visible:el.querySelector('input[type=checkbox]').checked}));
+  guardarLayoutInicio(layout);
+  closeModal('modal-personalizar-inicio');
+  renderInicio();
+  toast('✅ Inicio personalizado');
+}
+function restaurarLayoutInicio(){
+  guardarLayoutInicio(WIDGETS_INICIO.map(w=>({id:w.id,visible:true})));
+  renderPersonalizarInicioList();
+}
+
 function renderInicio(){
   const hoy=today();
   const mes=hoy.slice(0,7);
@@ -1457,6 +1565,43 @@ function renderInicio(){
   const MESES_ES=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
   const mesNom=MESES_ES[parseInt(mes.slice(5))-1]+' '+mes.slice(0,4);
 
+  // Margen bruto del mes (ventas − costo de lo vendido)
+  let costoVendidoMes=0,itemsSinCostoMes=0;
+  vtasMes.forEach(v=>(v.items||[]).forEach(it=>{
+    const p=it.prodId?inventario.find(x=>String(x.id)===String(it.prodId)):null;
+    if(p&&p.costo>0)costoVendidoMes+=p.costo*it.qty;else itemsSinCostoMes++;
+    if(it.respaldoId){const r=inventario.find(x=>String(x.id)===String(it.respaldoId));if(r&&r.costo>0)costoVendidoMes+=r.costo*it.qty;}
+  }));
+  const margenMes=totalMes-costoVendidoMes;
+  const margenPct=totalMes>0?Math.round(margenMes/totalMes*100):0;
+
+  // Ticket promedio por vendedor (mes)
+  const vendStats={};
+  vtasMes.forEach(v=>{const k=v.vendedor||'—';if(!vendStats[k])vendStats[k]={total:0,count:0};vendStats[k].total+=v.total;vendStats[k].count++;});
+  const ticketVendedor=Object.entries(vendStats).map(([k,s])=>({vendedor:k,ticket:Math.round(s.total/s.count),count:s.count})).sort((a,b)=>b.ticket-a.ticket);
+
+  // Ventas por hora del día (mes actual, según hora de creación)
+  const porHora={};
+  vtasMes.forEach(v=>{if(v.horaCreacion){const h=parseInt(v.horaCreacion.split(':')[0]);if(!isNaN(h))porHora[h]=(porHora[h]||0)+1;}});
+  const horasOrd=Object.keys(porHora).map(Number).sort((a,b)=>a-b);
+  const maxHora=Math.max(...horasOrd.map(h=>porHora[h]),1);
+
+  // Clientes nuevos vs recurrentes del mes
+  const clientesMes=new Set(vtasMes.map(v=>v.cliente));
+  let clientesNuevosN=0,clientesRecurrentesN=0;
+  clientesMes.forEach(c=>{
+    const teniaAntes=ventas.some(v=>v.cliente===c&&v.fecha<mes+'-01');
+    if(teniaAntes)clientesRecurrentesN++;else clientesNuevosN++;
+  });
+
+  // 😴 Sueños creados: unidades de colchones/camas vendidas este mes (toque especial DreamRest)
+  let unidadesDormir=0;
+  vtasMes.forEach(v=>(v.items||[]).forEach(it=>{
+    const p=it.prodId?inventario.find(x=>String(x.id)===String(it.prodId)):null;
+    const texto=(((p&&p.cat)||'')+' '+(it.desc||(p&&p.nombre)||'')).toLowerCase();
+    if(texto.includes('colch')||texto.includes('cama'))unidadesDormir+=parseInt(it.qty)||0;
+  }));
+
   // Panel de alertas accionables
   const _despAtr=ventas.filter(v=>v.desp>0&&!['despachado','cancelado'].includes(v.estado||'pendiente')&&(v.fechaDesp||v.fecha)<hoy).length;
   const _despHoy=ventas.filter(v=>v.desp>0&&!['despachado','cancelado'].includes(v.estado||'pendiente')&&(v.fechaDesp||v.fecha)===hoy).length;
@@ -1469,11 +1614,20 @@ function renderInicio(){
   if(_recompra>0)_alertas.push(`<div class="alerta ambar" onclick="abrirRecompra()"><span class="ico">🔄</span><div class="txt"><b>${_recompra} cliente${_recompra!==1?'s':''} para reactivar</b><div>Compraron hace años, quizá quieran renovar</div></div><span class="cta">Ver →</span></div>`);
   if(sinStock>0||bajoStock>0)_alertas.push(`<div class="alerta rojo" onclick="abrirReposicion()"><span class="ico">📉</span><div class="txt"><b>${[sinStock>0?sinStock+' sin stock':'',bajoStock>0?bajoStock+' con stock bajo':''].filter(Boolean).join(' · ')}</b><div>Conviene reponer</div></div><span class="cta">Ver →</span></div>`);
   const panelAlertas=_alertas.length?`<div class="alertas">${_alertas.join('')}</div>`:`<div class="alertas"><div class="alerta" style="cursor:default"><span class="ico">✅</span><div class="txt"><b>¡Todo al día!</b><div>Sin despachos atrasados ni saldos urgentes</div></div></div></div>`;
-  document.getElementById('inicio-content').innerHTML=`
-    <div class="section-title">${(()=>{const h=new Date().getHours();return h<12?'Buenos días ☀️':h<20?'Buenas tardes 👋':'Buenas noches 🌙';})()} <span style="font-size:12px;font-weight:400;color:var(--text3);font-family:'Inter',sans-serif">${new Date().toLocaleDateString('es-CL',{weekday:'long',day:'numeric',month:'long'})}</span></div>
-    ${panelAlertas}
 
-    <div class="stat-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+  const widgetsHtml={
+    suenos:`<div class="card" style="background:linear-gradient(135deg,#1e293b,#334155);border:none;color:#fff;margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:14px">
+        <div style="font-size:34px;line-height:1">😴</div>
+        <div>
+          <div style="font-size:10px;color:#cbd5e1;text-transform:uppercase;letter-spacing:.06em;font-weight:600">Sueños creados en ${mesNom}</div>
+          <div style="font-size:21px;font-weight:700">${unidadesDormir} ${unidadesDormir!==1?'colchones':'colchón'} y camas</div>
+          <div style="font-size:11px;color:#cbd5e1;margin-top:2px">Ayudaste a que ${unidadesDormir} hogar${unidadesDormir!==1?'es':''} duerman mejor esta noche 🌙</div>
+        </div>
+      </div>
+    </div>`,
+    alertas:panelAlertas,
+    stats:`<div class="stat-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:12px">
       <div class="stat" style="background:linear-gradient(145deg,#a87f3e,#c89958);border:none">
         <div class="stat-lbl" style="color:rgba(255,255,255,.85)">☀️ Hoy</div>
         <div class="stat-val" style="color:#fff">${fmt(totalHoy)}</div>
@@ -1483,13 +1637,24 @@ function renderInicio(){
       <div class="stat"><div class="stat-lbl">🎟️ Ticket promedio</div><div class="stat-val">${fmt(ticketProm)}</div></div>
       <div class="stat"><div class="stat-lbl">⏳ Saldo por cobrar</div><div class="stat-val ${saldoPend>0?'warn':''}" style="font-size:16px">${fmt(saldoPend)}</div></div>
       <div class="stat"><div class="stat-lbl">📦 Sin stock / Bajo</div><div class="stat-val warn" style="font-size:16px">${sinStock} / ${bajoStock}</div></div>
-    </div>
-
-    ${mejorVend&&mejorVend[1]>0?`<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+    </div>`,
+    mejorVendedor:mejorVend&&mejorVend[1]>0?`<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
       <div style="background:linear-gradient(135deg,#fef3c7,#fde68a);border:1px solid #d97706;border-radius:99px;padding:6px 14px;font-size:12px;color:#92400e">🏆 Mejor vendedor del mes: <strong>${mejorVend[0]}</strong> · ${fmt(mejorVend[1])}</div>
-    </div>`:''}
-
-    ${pagosOrd.length?`<div class="card" style="margin-bottom:12px">
+    </div>`:'',
+    margenBruto:`<div class="card" style="margin-bottom:12px">
+      <h4 style="margin-bottom:8px">💰 Margen bruto — ${mesNom}</h4>
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="flex:1"><div style="font-size:11px;color:var(--text3)">Ventas</div><div style="font-size:16px;font-weight:700">${fmt(totalMes)}</div></div>
+        <div style="flex:1"><div style="font-size:11px;color:var(--text3)">Costo</div><div style="font-size:16px;font-weight:700;color:#dc2626">−${fmt(costoVendidoMes)}</div></div>
+        <div style="flex:1;text-align:right"><div style="font-size:11px;color:var(--text3)">Margen</div><div style="font-size:18px;font-weight:700;color:${margenMes>=0?'#166534':'#dc2626'}">${fmt(margenMes)} <span style="font-size:11px">(${margenPct}%)</span></div></div>
+      </div>
+      ${itemsSinCostoMes>0?`<div class="muted" style="font-size:10px;margin-top:6px">${itemsSinCostoMes} ítem(s) sin costo asignado — el margen real puede variar.</div>`:''}
+    </div>`,
+    ticketVendedor:ticketVendedor.length?`<div class="card" style="margin-bottom:12px">
+      <h4 style="margin-bottom:10px">🎟️ Ticket promedio por vendedor</h4>
+      ${ticketVendedor.map(v=>`<div class="item-row"><span>${v.vendedor}</span><span><strong>${fmt(v.ticket)}</strong> <span class="muted">(${v.count})</span></span></div>`).join('')}
+    </div>`:'',
+    mediosPago:pagosOrd.length?`<div class="card" style="margin-bottom:12px">
       <h4 style="margin-bottom:10px">💳 ¿Cómo te pagan este mes?</h4>
       <div style="display:flex;height:14px;border-radius:99px;overflow:hidden;margin-bottom:10px">
         ${pagosOrd.map(([k,v])=>`<div style="width:${Math.max(2,v/totalPagos*100)}%;background:${PAGO_COLORES[k]||'#78716c'}" title="${k}: ${fmt(v)}"></div>`).join('')}
@@ -1500,9 +1665,8 @@ function renderInicio(){
           ${k} <strong>${fmt(v)}</strong> <span class="muted">(${Math.round(v/totalPagos*100)}%)</span>
         </div>`).join('')}
       </div>
-    </div>`:''}
-
-    ${difPct!==null?`<div class="card" style="margin-bottom:12px">
+    </div>`:'',
+    comparativaMes:difPct!==null?`<div class="card" style="margin-bottom:12px">
       <h4 style="margin-bottom:8px">📊 Comparativa con ${MESES[mesAntDate.getMonth()]}</h4>
       <div style="display:flex;align-items:center;gap:12px">
         <div style="flex:1">
@@ -1518,41 +1682,52 @@ function renderInicio(){
         </div>
       </div>
       <div style="font-size:11px;color:#78716c;margin-top:8px;text-align:center">${MESES[mesAntDate.getMonth()]} cerró con ${fmt(totalMesAnt)} en total</div>
-    </div>`:''}
-
-    ${despHoy.length?`<div class="card" style="border-left:3px solid #a87f3e;margin-bottom:12px">
+    </div>`:'',
+    ventasPorHora:`<div class="card" style="margin-bottom:12px">
+      <h4 style="margin-bottom:12px">🕐 Ventas por hora del día — ${mesNom}</h4>
+      ${horasOrd.length?`<div style="display:flex;align-items:flex-end;gap:3px;height:70px">
+        ${horasOrd.map(h=>`<div style="flex:1;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:2px" title="${h}:00 — ${porHora[h]} venta${porHora[h]!==1?'s':''}">
+          <div style="width:100%;background:linear-gradient(to top,#0369a1,#38bdf8);height:${Math.max(6,Math.round(porHora[h]/maxHora*100))}%;border-radius:3px;min-height:3px"></div>
+          <div style="font-size:8px;color:#a8a29e">${h}h</div>
+        </div>`).join('')}
+      </div>`:'<div class="empty">Sin datos suficientes todavía</div>'}
+    </div>`,
+    clientesNuevos:`<div class="card" style="margin-bottom:12px">
+      <h4 style="margin-bottom:10px">🙋 Clientes — ${mesNom}</h4>
+      <div style="display:flex;gap:16px">
+        <div style="flex:1;text-align:center"><div style="font-size:22px;font-weight:700;color:#166534">${clientesNuevosN}</div><div style="font-size:11px;color:var(--text3)">Nuevos</div></div>
+        <div style="flex:1;text-align:center"><div style="font-size:22px;font-weight:700;color:#0369a1">${clientesRecurrentesN}</div><div style="font-size:11px;color:var(--text3)">Recurrentes</div></div>
+      </div>
+    </div>`,
+    despachosHoy:despHoy.length?`<div class="card" style="border-left:3px solid #a87f3e;margin-bottom:12px">
       <h4 style="color:#a87f3e;margin-bottom:8px">🚚 Despachos de hoy (${despHoy.length})</h4>
       ${despHoy.map(v=>`<div class="item-row"><span><strong>${v.cliente}</strong> · ${[v.despCalle,v.despNumero,v.despComuna].filter(Boolean).join(', ')||'Sin dirección'}</span>
         <button onclick="cambiarEstado('${v.id}','despachado')" style="font-size:10px;padding:3px 8px;background:#dcfce7;color:#166534;border:1px solid #166534;border-radius:6px;cursor:pointer">✓ Listo</button>
       </div>`).join('')}
-    </div>`:''}
-
-    ${proximosDesp.length?`<div class="card" style="border-left:3px solid #0369a1;margin-bottom:12px">
+    </div>`:'',
+    proximosDespachos:proximosDesp.length?`<div class="card" style="border-left:3px solid #0369a1;margin-bottom:12px">
       <h4 style="color:#0369a1;margin-bottom:8px">📅 Próximos despachos (${proximosDesp.length})</h4>
       ${proximosDesp.slice(0,6).map(v=>`<div class="item-row">
         <span><strong>${v.fechaDesp.split('-').reverse().join('/')}</strong>${v.despHora&&v.despHora!=='Sin preferencia'?' · '+v.despHora:''} — ${v.cliente}</span>
         <span class="muted" style="font-size:11px">${[v.despCalle,v.despNumero,v.despComuna].filter(Boolean).join(', ')||'Sin dirección'}</span>
       </div>`).join('')}
-    </div>`:''}
-
-    ${topSaldos.length?`<div class="card" style="border-left:3px solid #dc2626;margin-bottom:12px">
+    </div>`:'',
+    saldosPendientes:topSaldos.length?`<div class="card" style="border-left:3px solid #dc2626;margin-bottom:12px">
       <h4 style="color:#dc2626;margin-bottom:8px">⏳ Clientes con saldo pendiente</h4>
       ${topSaldos.map(([nombre,d])=>`<div class="item-row" style="cursor:pointer" onclick="verFichaCliente('${nombre.replace(/'/g,"\\'")}')">
         <span>${nombre} <span class="muted" style="font-size:10px">· última venta ${d.ultima.split('-').reverse().join('/')}</span></span>
         <strong class="warn">${fmt(d.saldo)}</strong>
       </div>`).join('')}
-    </div>`:''}
-
-    ${stockCritico.length?`<div class="card" style="border-left:3px solid #d97706;margin-bottom:12px">
+    </div>`:'',
+    stockCritico:stockCritico.length?`<div class="card" style="border-left:3px solid #d97706;margin-bottom:12px">
       <h4 style="color:#d97706;margin-bottom:8px">📦 Stock crítico — a reponer</h4>
       ${stockCritico.map(p=>{const s=parseInt(p.stock)||0;return`<div class="item-row">
         <span>${p.nombre} <span class="pill">${p.marca||''}</span></span>
         <span style="font-weight:700;color:${s<=0?'#dc2626':'#d97706'}">${s<=0?'Sin stock':s+' u'}</span>
       </div>`}).join('')}
       <button class="btn btn-sec btn-sm" style="margin-top:8px;width:100%" onclick="setTab('inventario')">📋 Ver inventario</button>
-    </div>`:''}
-
-    <div class="card">
+    </div>`:'',
+    ventas14dias:`<div class="card" style="margin-bottom:12px">
       <h4 style="margin-bottom:12px">📈 Ventas últimos 14 días</h4>
       <div style="display:flex;align-items:flex-end;gap:3px;height:80px">
         ${dias.map(d=>`<div style="flex:1;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:2px" title="${d.d}: ${fmt(d.total)}">
@@ -1560,23 +1735,33 @@ function renderInicio(){
           <div style="font-size:8px;color:#a8a29e;white-space:nowrap">${d.d}</div>
         </div>`).join('')}
       </div>
-    </div>
-
-    ${topProd.length?`<div class="card">
+    </div>`,
+    topProductos:topProd.length?`<div class="card" style="margin-bottom:12px">
       <h4 style="margin-bottom:10px">🏆 Más vendidos este mes</h4>
       ${topProd.map(([nom,v],i)=>`<div class="bar-row">
         <div class="bar-lbl"><span style="font-size:11px">${i+1}. ${nom.length>35?nom.slice(0,35)+'…':nom}</span><span><strong>${v.qty} u</strong> <span class="muted">${fmt(v.total)}</span></span></div>
         <div class="bar"><div class="bar-fill" style="width:${v.qty/topProd[0][1].qty*100}%"></div></div>
       </div>`).join('')}
-    </div>`:''}
-
-    ${sinMovimiento.length?`<div class="card">
+    </div>`:'',
+    sinMovimiento:sinMovimiento.length?`<div class="card" style="margin-bottom:12px">
       <h4 style="margin-bottom:10px">📭 Sin movimiento este mes</h4>
       ${sinMovimiento.map(p=>`<div class="item-row">
         <span>${p.nombre} <span class="pill">${p.marca}</span></span>
         <span class="muted">${p.stock} u en stock</span>
       </div>`).join('')}
-    </div>`:''}
+    </div>`:'',
+  };
+
+  const layoutInicio=getLayoutInicio();
+  const cuerpoWidgets=layoutInicio.filter(w=>w.visible!==false).map(w=>widgetsHtml[w.id]||'').join('');
+
+  document.getElementById('inicio-content').innerHTML=`
+    <div class="section-title">${(()=>{const h=new Date().getHours();return h<12?'Buenos días ☀️':h<20?'Buenas tardes 👋':'Buenas noches 🌙';})()} <span style="font-size:12px;font-weight:400;color:var(--text3);font-family:'Inter',sans-serif">${new Date().toLocaleDateString('es-CL',{weekday:'long',day:'numeric',month:'long'})}</span></div>
+    <div style="display:flex;justify-content:flex-end;margin:-8px 0 10px">
+      <button class="btn btn-sec btn-sm" onclick="abrirPersonalizarInicio()">⚙️ Personalizar</button>
+    </div>
+
+    ${cuerpoWidgets}
 
     <div style="display:flex;gap:8px;margin-top:4px">
       <button class="btn" style="flex:1" onclick="setTab('nueva-venta')">➕ Nueva venta</button>
@@ -7092,6 +7277,7 @@ Object.assign(window,{
   autocompleteProductoNV,selProdAutoNV,autocompleteProductoVT,selProdAutoVT,
   setArmadoNV,setRespaldoNV,
   renderInv,renderVentas,renderDespachos,renderResumen,renderInicio,renderNuevaVentaTab,renderVendedores,
+  abrirPersonalizarInicio,guardarPersonalizarInicio,restaurarLayoutInicio,
   limpiarFiltrosVentas,cambiarEstado,cambiarEstadoDetalle,registrarAbono,resetearInventario,
   editarAbono,borrarAbono,abrirRegistroAbonos,renderRegistroAbonos,
   renderSaldos,abonarSaldo,pagarTotalSaldo,refrescarVistaActiva,actualizarBadges,
