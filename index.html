@@ -1299,6 +1299,37 @@ let cuponesConfig={activo:false,monto:150000,tipoDesc:'$',valor:10000,dias:30};
 // =========== HELPERS ===========
 let montosOcultos=false;
 const fmt=n=>montosOcultos?'$••••••':'$'+Math.round(n||0).toLocaleString('es-CL');
+
+// Gráfico de línea/área en SVG puro (sin dependencias). puntos: [{label,val}]
+let _svgTrendSeq=0;
+function svgTrend(puntos,opts={}){
+  const w=opts.width||640,h=opts.height||110,pad=6;
+  const id='trendGrad'+(_svgTrendSeq++);
+  const vals=puntos.map(p=>p.val);
+  const max=Math.max(...vals,0),min=Math.min(...vals,0);
+  const rango=(max-min)||1;
+  const n=puntos.length;
+  const stepX=n>1?(w-2*pad)/(n-1):0;
+  const xy=puntos.map((p,i)=>[pad+i*stepX, h-pad-(p.val-min)/rango*(h-2*pad)]);
+  const path=xy.map((p,i)=>(i===0?'M':'L')+p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ');
+  const area=path+` L${xy[xy.length-1][0].toFixed(1)},${h-pad} L${xy[0][0].toFixed(1)},${h-pad} Z`;
+  const color=opts.color||'#a87f3e';
+  const puntosSvg=xy.map((p,i)=>`<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2.5" fill="${color}"><title>${puntos[i].label}: ${montosOcultos?'••••••':fmt(puntos[i].val).replace('$','')}</title></circle>`).join('');
+  return`<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:${h}px;display:block" preserveAspectRatio="none">
+    <defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="${color}" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="${color}" stop-opacity="0"/>
+    </linearGradient></defs>
+    <path d="${area}" fill="url(#${id})" stroke="none"/>
+    <path d="${path}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
+    ${puntosSvg}
+  </svg>`;
+}
+function svgTrendLeyenda(puntos){
+  if(!puntos.length)return'';
+  const primero=puntos[0],ultimo=puntos[puntos.length-1];
+  return`<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3);margin-top:4px"><span>${primero.label}</span><span>${ultimo.label}</span></div>`;
+}
 const MESES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 // Fecha local (Chile), NO UTC: toISOString() adelanta el día después de las ~20:00 hora local
 const isoLocal=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
@@ -3549,6 +3580,26 @@ async function cerrarCaja(){
 }
 
 // =========== FINANZAS ===========
+function totalSueldosMes(mesStr){
+  return empleados.filter(e=>e.activo!==false).reduce((a,e)=>a+liquidacionEmpleado(e,mesStr).total,0);
+}
+function gananciaMes(anio,mes){
+  const mesStr=`${anio}-${String(mes+1).padStart(2,'0')}`;
+  const ventasMes=ventas.filter(v=>v.fecha.startsWith(mesStr)&&(v.estado||'pendiente')!=='cancelado');
+  const totalVentas=ventasMes.reduce((a,v)=>a+v.total,0);
+  let costoVendido=0;
+  ventasMes.forEach(v=>v.items.forEach(it=>{
+    const p=it.prodId?inventario.find(x=>String(x.id)===String(it.prodId)):null;
+    if(p&&p.costo>0)costoVendido+=p.costo*it.qty;
+    if(it.respaldoId){
+      const r=inventario.find(x=>String(x.id)===String(it.respaldoId));
+      if(r&&r.costo>0)costoVendido+=r.costo*it.qty;
+    }
+  }));
+  const totalGastosFijos=gastosFijos.reduce((a,g)=>a+(g.monto||0),0);
+  const sueldos=totalSueldosMes(mesStr);
+  return{ventas:totalVentas,ganancia:totalVentas-costoVendido-totalGastosFijos-sueldos};
+}
 function renderFinanzas(){
   const cont=document.getElementById('fin-content');
   if(!cont)return;
@@ -3607,6 +3658,17 @@ function renderFinanzas(){
     </div>
     ${itemsSinCosto>0?`<div class="help">⚠ Hay ${itemsSinCosto} ítem(s) vendido(s) sin costo asignado. Edita esos productos y agrégales el costo para que la ganancia sea exacta.</div>`:''}
     <div class="help" style="border-left-color:#0369a1;background:#f0f9ff;color:#0369a1">💡 Las compras del mes (${fmt(totalCompras)}) son inversión en inventario: se convierten en costo cuando vendes el producto. Por eso no se restan directo de la ganancia.</div>
+
+    <!-- TENDENCIA GANANCIA -->
+    ${(()=>{
+      const meses6=[];
+      for(let i=5;i>=0;i--){
+        let m=mesSel-i,a=anioSel;
+        while(m<0){m+=12;a--;}
+        meses6.push({label:MESES[m].slice(0,3)+' '+String(a).slice(2),...gananciaMes(a,m)});
+      }
+      return`<div class="card"><h4 style="margin-bottom:4px">📈 Ganancia — últimos 6 meses</h4>${svgTrend(meses6.map(m=>({label:m.label,val:m.ganancia})),{color:meses6[meses6.length-1].ganancia>=0?'#166534':'#dc2626'})}${svgTrendLeyenda(meses6.map(m=>({label:m.label})))}</div>`;
+    })()}
 
     <!-- GASTOS FIJOS -->
     <div class="card" style="border-top:3px solid #dc2626;margin-top:14px">
@@ -6566,6 +6628,7 @@ function renderResumen(){
       const mr=items.filter(v=>new Date(v.fecha).getMonth()===i);
       return{label:m,val:mr.reduce((a,v)=>a+v.total,0),count:mr.length};
     });
+    charts+=`<div class="card"><h4 style="margin-bottom:4px">📈 Tendencia — ${anio}</h4>${svgTrend(porMes)}${svgTrendLeyenda(porMes)}</div>`;
     const max=Math.max(...porMes.map(m=>m.val),1);
     charts+=`<div class="card"><h4 style="margin-bottom:10px">Ventas por mes — ${anio}</h4>${porMes.map(m=>m.val>0?`
       <div class="bar-row">
@@ -6581,6 +6644,10 @@ function renderResumen(){
       porDia[d].val+=v.total;porDia[d].count++;
     });
     const dias=Object.entries(porDia).sort((a,b)=>a[0].localeCompare(b[0]));
+    if(dias.length>1){
+      const puntosDia=dias.map(([d,v])=>({label:d.split('-').reverse().join('/'),val:v.val}));
+      charts+=`<div class="card"><h4 style="margin-bottom:4px">📈 Tendencia — ${MESES[mes]} ${anio}</h4>${svgTrend(puntosDia)}${svgTrendLeyenda(puntosDia)}</div>`;
+    }
     const max=Math.max(...dias.map(d=>d[1].val),1);
     charts+=`<div class="card"><h4 style="margin-bottom:10px">Ventas por día</h4>${dias.length?dias.map(([d,v])=>`
       <div class="bar-row">
