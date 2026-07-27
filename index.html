@@ -1399,6 +1399,9 @@ const WIDGETS_INICIO=[
   {id:'topProductos',label:'🏆 Más vendidos este mes'},
   {id:'sinMovimiento',label:'📭 Sin movimiento este mes'},
 ];
+// Tarjetas que revelan costo/margen o comparan el desempeño individual de cada vendedor:
+// se ocultan a quien no tenga clave de administrador, sin importar su personalización.
+const WIDGETS_INICIO_ADMIN=new Set(['margenBruto','ticketVendedor']);
 function getLayoutInicio(){
   try{
     const saved=JSON.parse(localStorage.getItem('dr_inicio_layout'));
@@ -1421,6 +1424,7 @@ function renderPersonalizarInicioList(){
   const layout=getLayoutInicio();
   const cont=document.getElementById('personalizar-inicio-list');
   cont.innerHTML=layout.map(w=>{
+    if(WIDGETS_INICIO_ADMIN.has(w.id)&&!esAdmin())return'';
     const meta=WIDGETS_INICIO.find(x=>x.id===w.id);
     if(!meta)return'';
     return`<div class="personalizar-item" draggable="true" data-id="${w.id}" style="display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;background:var(--white);cursor:grab">
@@ -1753,7 +1757,7 @@ function renderInicio(){
   };
 
   const layoutInicio=getLayoutInicio();
-  const cuerpoWidgets=layoutInicio.filter(w=>w.visible!==false).map(w=>widgetsHtml[w.id]||'').join('');
+  const cuerpoWidgets=layoutInicio.filter(w=>w.visible!==false&&!(WIDGETS_INICIO_ADMIN.has(w.id)&&!esAdmin())).map(w=>widgetsHtml[w.id]||'').join('');
 
   document.getElementById('inicio-content').innerHTML=`
     <div class="section-title">${(()=>{const h=new Date().getHours();return h<12?'Buenos días ☀️':h<20?'Buenas tardes 👋':'Buenas noches 🌙';})()} <span style="font-size:12px;font-weight:400;color:var(--text3);font-family:'Inter',sans-serif">${new Date().toLocaleDateString('es-CL',{weekday:'long',day:'numeric',month:'long'})}</span></div>
@@ -4806,9 +4810,11 @@ async function toggleAdmin(){
     if(await confirmDialog('¿Bloquear el modo administrador en este equipo?')){
       sessionStorage.removeItem('dr_admin');
       pintarCandado();
-      // Si está en una pestaña protegida, volver a Ventas
-      const tabProtegida=['inicio','resumen','finanzas','costosfab','cupones'].some(t=>document.getElementById('tab-'+t).classList.contains('active'));
+      // Si está en una pestaña protegida, volver a Ventas. Si está en Inicio, solo re-renderizar
+      // para ocultar las tarjetas sensibles (Inicio en sí es visible para todos).
+      const tabProtegida=['resumen','finanzas','costosfab','cupones'].some(t=>document.getElementById('tab-'+t).classList.contains('active'));
       if(tabProtegida)setTab('ventas');
+      else if(document.getElementById('tab-inicio').classList.contains('active'))renderInicio();
     }
   }else{
     await requiereAdmin();
@@ -5024,8 +5030,9 @@ function initPrivacidad(){
 }
 
 function setTab(t){
-  // El Inicio, Resumen y Finanzas (datos sensibles) requieren modo administrador
-  if((t==='inicio'||t==='resumen'||t==='finanzas'||t==='costosfab'||t==='hermanos'||t==='cupones')&&!esAdmin()){
+  // Resumen y Finanzas (datos sensibles) requieren modo administrador. Inicio es visible para todos
+  // (ver WIDGETS_INICIO_ADMIN para las tarjetas de Inicio que igual se ocultan sin clave de admin).
+  if((t==='resumen'||t==='finanzas'||t==='costosfab'||t==='hermanos'||t==='cupones')&&!esAdmin()){
     requiereAdmin().then(ok=>{if(ok)setTab(t);});
     closeSidebar();
     return;
