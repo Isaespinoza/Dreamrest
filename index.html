@@ -457,6 +457,7 @@ tbody tr:hover{background:var(--gold-bg)}
     <div class="toolbar">
       <button class="btn btn-sm" onclick="openProd()">+ Agregar producto</button>
       <button class="btn btn-sm" style="background:#166534" onclick="abrirImportar()">📊 Importar Excel</button>
+      <button class="btn btn-sec btn-sm" onclick="abrirReposicion()" style="border-color:#b45309;color:#b45309">📋 Reposición</button>
       <button class="btn btn-sec btn-sm" onclick="exportInv()">📥 Exportar</button>
       <button class="btn btn-sec btn-sm" onclick="resetearInventario()" style="border-color:#dc2626;color:#dc2626">🔄 Resetear</button>
     </div>
@@ -563,6 +564,21 @@ tbody tr:hover{background:var(--gold-bg)}
     </div>
     <div class="muted" style="font-size:12px;margin-bottom:12px">Compraron hace más de 6 años. ¡Buen momento para ofrecerles renovar su colchón! 🛏️</div>
     <div id="recompra-list"></div>
+  </div>
+</div>
+
+<div class="modal-bg" id="modal-reposicion">
+  <div class="modal" style="max-width:640px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <h3 style="margin:0">📋 Reposición de stock</h3>
+      <button class="btn btn-sec btn-sm" onclick="closeModal('modal-reposicion')">✕ Cerrar</button>
+    </div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px">Productos sin stock o por debajo del mínimo, con cantidad sugerida a comprar (hasta el doble del mínimo).</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+      <button class="btn btn-sec btn-sm" onclick="copiarListaReposicion()">📋 Copiar lista</button>
+      <button class="btn btn-sec btn-sm" onclick="exportReposicion()">⬇️ Descargar CSV</button>
+    </div>
+    <div id="reposicion-list"></div>
   </div>
 </div>
 
@@ -1396,7 +1412,7 @@ function renderInicio(){
   if(_nSaldos>0)_alertas.push(`<div class="alerta ambar" onclick="setTab('saldos')"><span class="ico">💵</span><div class="txt"><b>${_nSaldos} venta${_nSaldos!==1?'s':''} por cobrar</b><div>Total pendiente ${fmt(saldoPend)}</div></div><span class="cta">Cobrar →</span></div>`);
   const _recompra=recompraCandidatos().length;
   if(_recompra>0)_alertas.push(`<div class="alerta ambar" onclick="abrirRecompra()"><span class="ico">🔄</span><div class="txt"><b>${_recompra} cliente${_recompra!==1?'s':''} para reactivar</b><div>Compraron hace años, quizá quieran renovar</div></div><span class="cta">Ver →</span></div>`);
-  if(sinStock>0||bajoStock>0)_alertas.push(`<div class="alerta rojo" onclick="setTab('inventario')"><span class="ico">📉</span><div class="txt"><b>${[sinStock>0?sinStock+' sin stock':'',bajoStock>0?bajoStock+' con stock bajo':''].filter(Boolean).join(' · ')}</b><div>Conviene reponer</div></div><span class="cta">Ver →</span></div>`);
+  if(sinStock>0||bajoStock>0)_alertas.push(`<div class="alerta rojo" onclick="abrirReposicion()"><span class="ico">📉</span><div class="txt"><b>${[sinStock>0?sinStock+' sin stock':'',bajoStock>0?bajoStock+' con stock bajo':''].filter(Boolean).join(' · ')}</b><div>Conviene reponer</div></div><span class="cta">Ver →</span></div>`);
   const panelAlertas=_alertas.length?`<div class="alertas">${_alertas.join('')}</div>`:`<div class="alertas"><div class="alerta" style="cursor:default"><span class="ico">✅</span><div class="txt"><b>¡Todo al día!</b><div>Sin despachos atrasados ni saldos urgentes</div></div></div></div>`;
   document.getElementById('inicio-content').innerHTML=`
     <div class="section-title">${(()=>{const h=new Date().getHours();return h<12?'Buenos días ☀️':h<20?'Buenas tardes 👋':'Buenas noches 🌙';})()} <span style="font-size:12px;font-weight:400;color:var(--text3);font-family:'Inter',sans-serif">${new Date().toLocaleDateString('es-CL',{weekday:'long',day:'numeric',month:'long'})}</span></div>
@@ -4950,6 +4966,44 @@ function waRecompra(cli,tel){
   abrirWa(tel,`Hola ${cli} 👋, le saludamos de DreamRest. Ha pasado un tiempo desde su última compra y queríamos contarle que tenemos nuevos modelos de colchones y ofertas. ¿Le gustaría ver las novedades? 😊`);
 }
 
+// =========== REPOSICIÓN DE STOCK ===========
+function listaReposicion(){
+  return inventario.filter(p=>{
+    if(p.combo)return false;
+    const stock=parseInt(p.stock)||0;
+    const min=parseInt(p.minStock)||2;
+    return stock<=min;
+  }).map(p=>{
+    const stock=parseInt(p.stock)||0;
+    const min=parseInt(p.minStock)||2;
+    const sugerido=Math.max(min*2-stock,min||1,1);
+    return{...p,stock,min,sugerido};
+  }).sort((a,b)=>a.stock-b.stock||a.nombre.localeCompare(b.nombre));
+}
+function abrirReposicion(){openModal('modal-reposicion');renderReposicion();}
+function renderReposicion(){
+  const cont=document.getElementById('reposicion-list');
+  if(!cont)return;
+  const items=listaReposicion();
+  if(!items.length){cont.innerHTML='<div class="empty">🎉 No hay productos bajo el mínimo de stock.</div>';return;}
+  cont.innerHTML=items.map(p=>`<div class="item-row">
+    <span>${p.nombre}${p.marca?` <span class="muted">(${p.marca})</span>`:''}</span>
+    <span>${p.stock<=0?'<strong style="color:#dc2626">Sin stock</strong>':`<span style="color:#b45309">${p.stock} u</span>`} · mín ${p.min} · <strong>comprar ${p.sugerido}</strong></span>
+  </div>`).join('');
+}
+function copiarListaReposicion(){
+  const items=listaReposicion();
+  if(!items.length){toast('No hay productos por reponer');return;}
+  const txt='Lista de reposición DreamRest — '+today()+'\n'+items.map(p=>`- ${p.nombre}${p.marca?' ('+p.marca+')':''}: comprar ${p.sugerido} (stock ${p.stock}, mínimo ${p.min})`).join('\n');
+  navigator.clipboard.writeText(txt).then(()=>toast('✅ Lista copiada al portapapeles')).catch(()=>toast('No se pudo copiar'));
+}
+function exportReposicion(){
+  const items=listaReposicion();
+  const csv=['Producto,Marca,Stock actual,Stock mínimo,Cantidad sugerida'];
+  items.forEach(p=>csv.push(`"${p.nombre.replace(/"/g,'""')}","${p.marca||''}",${p.stock},${p.min},${p.sugerido}`));
+  downloadCSV('reposicion_dreamrest_'+today()+'.csv',csv.join('\n'));
+}
+
 // =========== INVENTARIO ===========
 let editProdId=null;
 
@@ -4986,7 +5040,7 @@ function renderInv(){
     <div class="stat"><div class="stat-lbl">Productos</div><div class="stat-val">${items.length}</div></div>
     <div class="stat"><div class="stat-lbl">Unidades totales</div><div class="stat-val">${totalUnidades}</div></div>
     <div class="stat"><div class="stat-lbl">Valor inventario</div><div class="stat-val" style="font-size:15px">${fmt(valorMin)}</div></div>
-    <div class="stat"><div class="stat-lbl">Sin stock / Bajo</div><div class="stat-val warn" style="font-size:15px">${sinStock} / ${bajoStock}</div></div>`;
+    <div class="stat" style="cursor:pointer" onclick="abrirReposicion()"><div class="stat-lbl">Sin stock / Bajo</div><div class="stat-val warn" style="font-size:15px">${sinStock} / ${bajoStock}</div></div>`;
 
   if(!items.length){
     document.getElementById('inv-list').innerHTML='<div class="empty">No hay productos. Toca "+ Agregar producto" para empezar.</div>';
@@ -6878,6 +6932,7 @@ Object.assign(window,{
   abrirEmpleado,eliminarEmpleado,registrarEventoRRHH,eliminarEventoRRHH,
   renderCalculadora,updInsumoCalc,aplicarCostosInventario,guardarConfigCalculadora,
   handleFotoCompra,calcSugerenciaCompra,verFotoCompra,
+  abrirReposicion,renderReposicion,copiarListaReposicion,exportReposicion,
   imprimirVenta,descargarPedidoHTML,
   autocompleteCliente,selCliente,solicitarNotificaciones,
   renderVentasDeb,renderClientesDeb,renderInvDeb,
