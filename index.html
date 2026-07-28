@@ -213,6 +213,9 @@ label{display:block;font-size:10px;color:var(--text2);margin-bottom:5px;font-wei
 
 /* ===== MODAL ===== */
 .modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;padding:20px;align-items:flex-start;justify-content:center;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;backdrop-filter:blur(4px)}
+/* Los diálogos genéricos (confirm/prompt) pueden invocarse desde dentro de otro modal ya abierto:
+   necesitan quedar siempre por encima, sin depender del orden en el DOM. */
+#modal-confirm,#modal-formdialog{z-index:1001}
 .modal-bg.show{display:flex}
 body:has(.modal-bg.show){overflow:hidden}
 .modal{background:var(--white);border-radius:16px;padding:18px;width:100%;max-width:550px;margin-top:20px;box-shadow:0 20px 60px rgba(0,0,0,.25);border:1px solid color-mix(in srgb, var(--gold) 15%, var(--border))}
@@ -1341,6 +1344,7 @@ let rrhhEventos=[];
 let ventasHermanos=[];
 let asistencia=[];
 let cupones=[];
+let puntosCliente=[];
 // Config del cupón sorpresa (Sistema 2). Se pisa con lo guardado en config/cupones.
 let cuponesConfig={activo:false,monto:150000,tipoDesc:'$',valor:10000,dias:30};
 
@@ -2333,6 +2337,7 @@ async function saveVentaNV(){
     const cs=generarCuponSorpresa(v,batch);
     v.cuponSorpresa={codigo:cs.codigo,tipoDesc:cs.tipoDesc,valor:cs.valor,vence:cs.vence};
   }
+  otorgarPuntos(v,batch);
   batch.set(doc(db,'ventas',String(v.id)),v);
   ventas.push(v);
   // UI optimista: refresca de inmediato; el guardado sincroniza en 2do plano (offline-first)
@@ -2815,18 +2820,21 @@ function renderClientes(){
   if(!lista.length){
     html+='<div class="empty">No hay clientes registrados.</div>';
   }else{
-    html+=lista.map(([nombre,d],i)=>`<div class="card" style="cursor:pointer" onclick="verFichaCliente('${nombre.replace(/'/g,"\\'")}')">
+    html+=lista.map(([nombre,d],i)=>{
+      const pts=saldoPuntos(nombre);
+      return`<div class="card" style="cursor:pointer" onclick="verFichaCliente('${nombre.replace(/'/g,"\\'")}')">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
         <div style="flex:1;min-width:0">
           <h4 style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${i<3?['🥇','🥈','🥉'][i]+' ':''}${nombre}</h4>
-          <div class="muted" style="font-size:11px;margin-top:2px">${d.count} compra${d.count!==1?'s':''} · última ${d.ultima.split('-').reverse().join('/')}${d.tel?' · 📱 '+d.tel:''}</div>
+          <div class="muted" style="font-size:11px;margin-top:2px">${d.count} compra${d.count!==1?'s':''} · última ${d.ultima.split('-').reverse().join('/')}${d.tel?' · 📱 '+d.tel:''}${pts>0?' · 🎁 '+pts+' pts':''}</div>
           ${d.saldo>0?`<div class="warn" style="font-size:11px;margin-top:2px">⚠ Debe ${fmt(d.saldo)}</div>`:''}
         </div>
         <div style="text-align:right;flex-shrink:0">
           <div style="font-weight:700;color:#a87f3e">${fmt(d.total)}</div>
         </div>
       </div>
-    </div>`).join('');
+    </div>`;
+    }).join('');
   }
   document.getElementById('clientes-content').innerHTML=html;
 }
@@ -4441,6 +4449,48 @@ async function aplicarCostosInventario(){
   renderCalculadora();
 }
 
+// =========== FIDELIZACIÓN DE CLIENTES (PUNTOS) ===========
+// Se ganan puntos automáticamente al completar una venta (no en "Cliente mostrador").
+// El canje genera un cupón de descuento (reutiliza el sistema de cupones ya existente).
+const PUNTOS_POR_PESO=1/1000; // 1 punto por cada $1.000 en compras
+const VALOR_PESO_POR_PUNTO=10; // cada punto vale $10 al canjear (≈1% de vuelta)
+function calcularPuntos(monto){return Math.floor((monto||0)*PUNTOS_POR_PESO);}
+function saldoPuntos(cliente){
+  return puntosCliente.filter(p=>p.cliente===cliente).reduce((a,p)=>a+(p.puntos||0),0);
+}
+// Se llama al guardar una venta nueva (no en ediciones), agregando el registro al mismo batch atómico.
+function otorgarPuntos(v,batch){
+  if(!v.cliente||v.cliente==='Cliente mostrador')return;
+  const puntos=calcularPuntos(v.total);
+  if(puntos<=0)return;
+  const reg={id:uid()+'_pts',cliente:v.cliente,puntos,tipo:'ganado',fecha:v.fecha,motivo:'Compra',ventaId:v.id};
+  puntosCliente.push(reg);
+  batch.set(doc(db,'puntosCliente',String(reg.id)),reg);
+}
+async function canjearPuntos(cliente){
+  const saldo=saldoPuntos(cliente);
+  if(saldo<=0){alert('Este cliente no tiene puntos para canjear');return;}
+  const vals=await formDialog('🎁 Canjear puntos',[
+    {name:'info',type:'info',label:`<strong>${cliente}</strong> tiene <strong>${saldo} puntos</strong> (equivalen a ${fmt(saldo*VALOR_PESO_POR_PUNTO)}). Al canjear se genera un cupón de descuento válido por 60 días.`},
+    {name:'puntos',label:'Puntos a canjear',type:'number',default:saldo,required:true},
+  ]);
+  if(!vals)return;
+  const puntos=parseInt(vals.puntos)||0;
+  if(puntos<=0||puntos>saldo){alert('Cantidad de puntos inválida');return;}
+  const valorDescuento=Math.round(puntos*VALOR_PESO_POR_PUNTO);
+  const venceD=new Date();venceD.setDate(venceD.getDate()+60);
+  const cup={id:uid()+'_cup',codigo:genCodigoCupon(),origen:'fidelizacion',cliente:cliente,tipoDesc:'$',valor:valorDescuento,minCompra:0,creado:today(),vence:isoLocal(venceD),usado:false,usadoFecha:null,usadoVentaId:null};
+  const reg={id:uid()+'_pts',cliente,puntos:-puntos,tipo:'canjeado',fecha:today(),motivo:'Canje por cupón '+cup.codigo,ventaId:null};
+  const batch=writeBatch(db);
+  batch.set(doc(db,'cupones',String(cup.id)),cup);
+  batch.set(doc(db,'puntosCliente',String(reg.id)),reg);
+  cupones.push(cup);
+  puntosCliente.push(reg);
+  await batch.commit().catch(e=>toast('⚠️ Error al sincronizar: '+e.message));
+  toast('✅ Cupón '+cup.codigo+' generado ('+fmt(valorDescuento)+')');
+  verFichaCliente(cliente);
+}
+
 // =========== CUPONES DE DESCUENTO ===========
 // Sistema 1: cupones para flyers (lote, monto fijo, un solo uso).
 // Sistema 2: cupón sorpresa que se genera solo al cerrar una venta sobre el monto gatillante.
@@ -4616,7 +4666,7 @@ function exportCupones(){
   lista.forEach(c=>{
     const est=estadoCupon(c);
     const vUso=c.usadoVentaId?ventas.find(v=>String(v.id)===String(c.usadoVentaId)):null;
-    csv.push(`${c.codigo},${c.origen==='sorpresa'?'Sorpresa':'Flyer'},${c.tipoDesc==='%'?c.valor+'%':c.valor},${c.minCompra||0},${c.vence||''},${est},"${vUso?(c.usadoFecha+' · '+vUso.cliente).replace(/"/g,'""'):(c.usado?c.usadoFecha||'':'')}"`);
+    csv.push(`${c.codigo},${c.origen==='sorpresa'?'Sorpresa':c.origen==='fidelizacion'?'Fidelizacion':'Flyer'},${c.tipoDesc==='%'?c.valor+'%':c.valor},${c.minCompra||0},${c.vence||''},${est},"${vUso?(c.usadoFecha+' · '+vUso.cliente).replace(/"/g,'""'):(c.usado?c.usadoFecha||'':'')}"`);
   });
   downloadCSV('cupones_dreamrest_'+today()+'.csv',csv.join('\n'));
 }
@@ -4688,6 +4738,7 @@ function renderCupones(){
         <option value="" ${!fOrigen?'selected':''}>Todos los orígenes</option>
         <option value="flyer" ${fOrigen==='flyer'?'selected':''}>🖨️ Flyer</option>
         <option value="sorpresa" ${fOrigen==='sorpresa'?'selected':''}>🎁 Sorpresa</option>
+        <option value="fidelizacion" ${fOrigen==='fidelizacion'?'selected':''}>💎 Fidelización</option>
       </select>
       <button class="btn btn-sec btn-sm" onclick="exportCupones()">📥 Exportar CSV</button>
     </div>`;
@@ -4703,10 +4754,10 @@ function renderCupones(){
       const e=EST_CUP[est];
       const vUso=c.usadoVentaId?ventas.find(v=>String(v.id)===String(c.usadoVentaId)):null;
       const usoTxt=c.usado?`<div style="font-size:10px;color:#78716c">${(c.usadoFecha||'').split('-').reverse().join('/')}${vUso?' · '+vUso.cliente:''}</div>`:'';
-      const cliTxt=c.origen==='sorpresa'&&c.cliente?`<div style="font-size:10px;color:#78716c">para ${c.cliente}</div>`:'';
+      const cliTxt=(c.origen==='sorpresa'||c.origen==='fidelizacion')&&c.cliente?`<div style="font-size:10px;color:#78716c">para ${c.cliente}</div>`:'';
       html+=`<tr>
         <td><strong style="letter-spacing:1px">${c.codigo}</strong>${cliTxt}</td>
-        <td>${c.origen==='sorpresa'?'🎁 Sorpresa':'🖨️ Flyer'}</td>
+        <td>${c.origen==='sorpresa'?'🎁 Sorpresa':c.origen==='fidelizacion'?'💎 Fidelización':'🖨️ Flyer'}</td>
         <td>${descCuponTxt(c)}</td>
         <td>${(c.minCompra||0)>0?fmt(c.minCompra):'—'}</td>
         <td>${c.vence?c.vence.split('-').reverse().join('/'):'—'}</td>
@@ -4816,9 +4867,11 @@ async function initFirebase(){
     // Cupones: también en modo vendedora (se canjean y se generan al vender)
     const pCup=getDocs(collection(db,'cupones')).catch(()=>null);
     const pCupCfg=getDoc(doc(db,'config','cupones')).catch(()=>null);
+    // Puntos de fidelización: también en modo vendedora (se ganan al vender)
+    const pPts=getDocs(collection(db,'puntosCliente')).catch(()=>null);
 
-    const [invSnap,vtaSnap,cotSnap,promSnap,gasSnap,comSnap,cajSnap,empSnap,rhSnap,admSnap,calcSnap,herSnap,asiSnap,cupSnap,cupCfgSnap]=
-      await Promise.all([pInv,pVta,pCot,pProm,pGas,pCom,pCaj,pEmp,pRh,pAdm,pCalc,pHer,pAsi,pCup,pCupCfg]);
+    const [invSnap,vtaSnap,cotSnap,promSnap,gasSnap,comSnap,cajSnap,empSnap,rhSnap,admSnap,calcSnap,herSnap,asiSnap,cupSnap,cupCfgSnap,ptsSnap]=
+      await Promise.all([pInv,pVta,pCot,pProm,pGas,pCom,pCaj,pEmp,pRh,pAdm,pCalc,pHer,pAsi,pCup,pCupCfg,pPts]);
 
     if(invSnap.empty){
       const batch=writeBatch(db);
@@ -4898,6 +4951,10 @@ async function initFirebase(){
       cupones=snap.docs.map(d=>d.data());
       const tabCup=document.getElementById('tab-cupones');
       if(tabCup&&tabCup.classList.contains('active'))renderCupones();
+    });
+    if(ptsSnap)puntosCliente=ptsSnap.docs.map(d=>d.data());
+    onSnapshot(collection(db,'puntosCliente'),snap=>{
+      puntosCliente=snap.docs.map(d=>d.data());
     });
 
     if(!MODO_VENDEDORA){
@@ -5778,6 +5835,7 @@ async function saveVenta(){
     const cs=generarCuponSorpresa(v,batch);
     v.cuponSorpresa={codigo:cs.codigo,tipoDesc:cs.tipoDesc,valor:cs.valor,vence:cs.vence};
   }
+  if(esNueva)otorgarPuntos(v,batch);
   if(editVentaId){
     const i=ventas.findIndex(x=>String(x.id)===String(editVentaId));
     if(i>=0)ventas[i]=v;
@@ -5875,16 +5933,28 @@ function verFichaCliente(nombre){
     prods[n]=(prods[n]||0)+it.qty;
   }));
   const topProds=Object.entries(prods).sort((a,b)=>b[1]-a[1]).slice(0,3);
+  const puntos=saldoPuntos(nombre);
+  const histPuntos=puntosCliente.filter(p=>p.cliente===nombre).sort((a,b)=>b.fecha.localeCompare(a.fecha)).slice(0,5);
 
   document.getElementById('cli-titulo').textContent=nombre;
   document.getElementById('cli-content').innerHTML=`
     <div class="stat-grid" style="margin-bottom:14px">
       <div class="stat"><div class="stat-lbl">Total comprado</div><div class="stat-val gold" style="font-size:16px">${fmt(totalGastado)}</div></div>
       <div class="stat"><div class="stat-lbl">N° compras</div><div class="stat-val">${compras.length}</div></div>
+      <div class="stat"><div class="stat-lbl">🎁 Puntos</div><div class="stat-val" style="font-size:16px;color:#a87f3e">${puntos}</div></div>
       ${saldoPend>0?`<div class="stat"><div class="stat-lbl">Saldo pendiente</div><div class="stat-val warn" style="font-size:16px">${fmt(saldoPend)}</div></div>`:''}
     </div>
     ${tel?`<div class="item-row"><span class="muted">Teléfono</span><span>+56 9 ${tel}</span></div>`:''}
     <div class="item-row"><span class="muted">Última compra</span><span>${ultimaCompra.split('-').reverse().join('/')}</span></div>
+    <div style="margin-top:12px;background:var(--gold-bg);border:1px solid var(--gold);border-radius:10px;padding:10px 12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <div><strong>🎁 ${puntos} puntos</strong> <span class="muted" style="font-size:11px">(${fmt(puntos*VALOR_PESO_POR_PUNTO)} en descuentos)</span></div>
+        ${puntos>0?`<button class="btn btn-sm" style="flex-shrink:0" onclick="canjearPuntos('${nombre.replace(/'/g,"\\'")}')">Canjear</button>`:''}
+      </div>
+      ${histPuntos.length?`<div style="margin-top:8px">${histPuntos.map(p=>`<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3);padding:2px 0">
+        <span>${p.fecha.split('-').reverse().join('/')} · ${p.motivo}</span><span style="font-weight:600;color:${p.puntos>=0?'#166534':'#dc2626'}">${p.puntos>=0?'+':''}${p.puntos}</span>
+      </div>`).join('')}</div>`:''}
+    </div>
     ${topProds.length?`<div style="margin-top:12px"><div style="font-size:11px;color:#78716c;text-transform:uppercase;letter-spacing:.05em;font-weight:600;margin-bottom:6px">Lo que más compra</div>
       ${topProds.map(([n,q])=>`<div class="item-row"><span>${n}</span><span><strong>${q}u</strong></span></div>`).join('')}</div>`:''}
     <div style="margin-top:14px"><div style="font-size:11px;color:#78716c;text-transform:uppercase;letter-spacing:.05em;font-weight:600;margin-bottom:6px">Historial de compras</div>
@@ -7293,7 +7363,7 @@ Object.assign(window,{
   iniciarTour,tourSiguiente,tourAnterior,cerrarTour,exportarRespaldo,
   abrirRecompra,renderRecompra,marcarRecompraContactada,waRecompra,
   guardarMetaVendedor,
-  verFichaCliente,agregarProductosManuales,
+  verFichaCliente,agregarProductosManuales,canjearPuntos,
   renderCotizaciones,nuevaCotizacion,editarCotizacion,addCotItem,rmCotItem,updCotItem,renderCotItems,
   autocompleteCot,selCotProd,guardarCotizacion,eliminarCotizacion,convertirEnVenta,imprimirCotizacion,
   exportInv,exportVentas,openModal,closeModal,
