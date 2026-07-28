@@ -574,8 +574,15 @@ tbody tr:hover{background:var(--gold-bg)}
       <h3 style="margin:0">📋 Reposición de stock</h3>
       <button class="btn btn-sec btn-sm" onclick="closeModal('modal-reposicion')">✕ Cerrar</button>
     </div>
-    <div class="muted" style="font-size:12px;margin-bottom:10px">Productos sin stock o por debajo del mínimo, con cantidad sugerida a comprar (hasta el doble del mínimo).</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+    <div class="muted" style="font-size:12px;margin-bottom:10px">Productos por debajo del mínimo, o que a tu ritmo de venta actual se quedarían sin stock pronto. La cantidad sugerida cubre la cobertura elegida según tus ventas de los últimos 60 días.</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
+      <label style="margin:0;font-size:11px">Cubrir</label>
+      <select id="repo-cobertura" onchange="renderReposicion()" style="width:auto">
+        <option value="15">15 días</option>
+        <option value="30" selected>30 días</option>
+        <option value="45">45 días</option>
+        <option value="60">60 días</option>
+      </select>
       <button class="btn btn-sec btn-sm" onclick="copiarListaReposicion()">📋 Copiar lista</button>
       <button class="btn btn-sec btn-sm" onclick="exportReposicion()">⬇️ Descargar CSV</button>
     </div>
@@ -5297,40 +5304,69 @@ function waRecompra(cli,tel){
 }
 
 // =========== REPOSICIÓN DE STOCK ===========
-function listaReposicion(){
-  return inventario.filter(p=>{
-    if(p.combo)return false;
+// Unidades vendidas por producto en los últimos `dias` (ventas no canceladas; cuenta también respaldoId)
+function ventanaVentasUnidades(dias){
+  const desde=new Date();desde.setDate(desde.getDate()-dias);
+  const desdeStr=isoLocal(desde);
+  const mapa={};
+  ventas.forEach(v=>{
+    if(v.fecha<desdeStr)return;
+    if((v.estado||'pendiente')==='cancelado')return;
+    (v.items||[]).forEach(it=>{
+      const q=parseInt(it.qty)||0;
+      if(it.prodId)mapa[it.prodId]=(mapa[it.prodId]||0)+q;
+      if(it.respaldoId)mapa[it.respaldoId]=(mapa[it.respaldoId]||0)+q;
+    });
+  });
+  return mapa;
+}
+const REPOSICION_VENTANA_DIAS=60;
+function listaReposicion(coberturaDias){
+  coberturaDias=parseInt(coberturaDias)||30;
+  const unidadesVendidas=ventanaVentasUnidades(REPOSICION_VENTANA_DIAS);
+  return inventario.filter(p=>!p.combo).map(p=>{
     const stock=parseInt(p.stock)||0;
     const min=parseInt(p.minStock)||2;
-    return stock<=min;
-  }).map(p=>{
-    const stock=parseInt(p.stock)||0;
-    const min=parseInt(p.minStock)||2;
-    const sugerido=Math.max(min*2-stock,min||1,1);
-    return{...p,stock,min,sugerido};
-  }).sort((a,b)=>a.stock-b.stock||a.nombre.localeCompare(b.nombre));
+    const vendidas=unidadesVendidas[p.id]||unidadesVendidas[String(p.id)]||0;
+    const velocidadDia=vendidas/REPOSICION_VENTANA_DIAS;
+    const diasCobertura=velocidadDia>0?Math.max(stock,0)/velocidadDia:Infinity;
+    const sugeridoUmbral=stock<=min?Math.max(min*2-stock,min||1,1):0;
+    const sugeridoDemanda=velocidadDia>0?Math.max(Math.ceil(velocidadDia*coberturaDias)-stock,0):0;
+    const sugerido=Math.max(sugeridoUmbral,sugeridoDemanda);
+    return{...p,stock,min,vendidas,velocidadDia,diasCobertura,sugerido};
+  }).filter(p=>p.sugerido>0).sort((a,b)=>a.diasCobertura-b.diasCobertura||a.stock-b.stock);
 }
 function abrirReposicion(){openModal('modal-reposicion');renderReposicion();}
 function renderReposicion(){
   const cont=document.getElementById('reposicion-list');
   if(!cont)return;
-  const items=listaReposicion();
-  if(!items.length){cont.innerHTML='<div class="empty">🎉 No hay productos bajo el mínimo de stock.</div>';return;}
-  cont.innerHTML=items.map(p=>`<div class="item-row">
-    <span>${p.nombre}${p.marca?` <span class="muted">(${p.marca})</span>`:''}</span>
-    <span>${p.stock<=0?'<strong style="color:#dc2626">Sin stock</strong>':`<span style="color:#b45309">${p.stock} u</span>`} · mín ${p.min} · <strong>comprar ${p.sugerido}</strong></span>
-  </div>`).join('');
+  const sel=document.getElementById('repo-cobertura');
+  const items=listaReposicion(sel?sel.value:30);
+  if(!items.length){cont.innerHTML='<div class="empty">🎉 No hay productos por reponer.</div>';return;}
+  cont.innerHTML=items.map(p=>{
+    const velTxt=p.velocidadDia>0?`🔥 ${(p.velocidadDia*7).toFixed(1)} u/sem`:'sin ventas recientes';
+    const covTxt=p.velocidadDia>0&&isFinite(p.diasCobertura)?` · cobertura actual: ${Math.round(p.diasCobertura)} día${Math.round(p.diasCobertura)!==1?'s':''}`:'';
+    return`<div class="item-row" style="flex-direction:column;align-items:flex-start;gap:3px">
+      <div style="display:flex;justify-content:space-between;width:100%;gap:8px">
+        <span>${p.nombre}${p.marca?` <span class="muted">(${p.marca})</span>`:''}</span>
+        <span style="white-space:nowrap">${p.stock<=0?'<strong style="color:#dc2626">Sin stock</strong>':`<span style="color:#b45309">${p.stock} u</span>`} · mín ${p.min} · <strong>comprar ${p.sugerido}</strong></span>
+      </div>
+      <div class="muted" style="font-size:10px">${velTxt}${covTxt}</div>
+    </div>`;
+  }).join('');
 }
 function copiarListaReposicion(){
-  const items=listaReposicion();
+  const sel=document.getElementById('repo-cobertura');
+  const items=listaReposicion(sel?sel.value:30);
   if(!items.length){toast('No hay productos por reponer');return;}
-  const txt='Lista de reposición DreamRest — '+today()+'\n'+items.map(p=>`- ${p.nombre}${p.marca?' ('+p.marca+')':''}: comprar ${p.sugerido} (stock ${p.stock}, mínimo ${p.min})`).join('\n');
+  const txt='Lista de reposición DreamRest — '+today()+'\n'+items.map(p=>`- ${p.nombre}${p.marca?' ('+p.marca+')':''}: comprar ${p.sugerido} (stock ${p.stock}, mínimo ${p.min}${p.velocidadDia>0?', vende '+(p.velocidadDia*7).toFixed(1)+' u/sem':''})`).join('\n');
   navigator.clipboard.writeText(txt).then(()=>toast('✅ Lista copiada al portapapeles')).catch(()=>toast('No se pudo copiar'));
 }
 function exportReposicion(){
-  const items=listaReposicion();
-  const csv=['Producto,Marca,Stock actual,Stock mínimo,Cantidad sugerida'];
-  items.forEach(p=>csv.push(`"${p.nombre.replace(/"/g,'""')}","${p.marca||''}",${p.stock},${p.min},${p.sugerido}`));
+  const sel=document.getElementById('repo-cobertura');
+  const items=listaReposicion(sel?sel.value:30);
+  const csv=['Producto,Marca,Stock actual,Stock mínimo,Ventas/semana,Cobertura actual (días),Cantidad sugerida'];
+  items.forEach(p=>csv.push(`"${p.nombre.replace(/"/g,'""')}","${p.marca||''}",${p.stock},${p.min},${(p.velocidadDia*7).toFixed(1)},${isFinite(p.diasCobertura)?Math.round(p.diasCobertura):''},${p.sugerido}`));
   downloadCSV('reposicion_dreamrest_'+today()+'.csv',csv.join('\n'));
 }
 
