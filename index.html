@@ -886,9 +886,15 @@ tbody tr:hover{background:var(--gold-bg)}
     <h3 id="cot-titulo">Nueva cotización</h3>
     <div class="row">
       <div class="field"><label>Fecha</label><input type="date" id="cot-fecha"></div>
-      <div class="field"><label>Tipo</label><select id="cot-tipo" onchange="renderCotItems()">
+      <div class="field"><label>Tipo</label><select id="cot-tipo" onchange="updTipoVentaCot();renderCotItems()">
         <option value="min">Minorista</option><option value="may">Mayorista</option>
       </select></div>
+    </div>
+    <div id="cot-rut-row" style="display:none">
+      <div class="row">
+        <div class="field"><label>RUT</label><input type="text" id="cot-rut" placeholder="12.345.678-9"></div>
+        <div class="field"><label>Empresa</label><input type="text" id="cot-empresa"></div>
+      </div>
     </div>
     <div class="field" style="position:relative">
       <label>Cliente</label>
@@ -911,6 +917,77 @@ tbody tr:hover{background:var(--gold-bg)}
       <button class="btn btn-sec btn-sm" onclick="addCotItem()">+ Agregar</button>
     </div>
     <div id="cot-items"></div>
+
+    <!-- DESCUENTO -->
+    <div style="background:#fef9f0;border-radius:10px;padding:10px;margin:12px 0">
+      <div style="font-size:10px;color:#a87f3e;font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">🏷️ Descuento</div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <select id="cot-desc-tipo" onchange="recalcCot()" style="width:70px;flex-shrink:0">
+          <option value="$">$</option><option value="%">%</option>
+        </select>
+        <input type="number" id="cot-desc-valor" placeholder="Descuento (opcional)" min="0" oninput="recalcCot()" style="flex:1">
+        <span id="cot-desc-info" class="muted" style="font-size:11px;white-space:nowrap"></span>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;margin-top:8px">
+        <span style="font-size:16px;flex-shrink:0">🎟️</span>
+        <input type="text" id="cot-cupon" placeholder="Código de cupón (ej: DR-A7X9)" autocomplete="off" oninput="this.value=this.value.toUpperCase();recalcCot()" style="flex:1;text-transform:uppercase">
+        <span id="cot-cupon-info" style="font-size:11px;white-space:nowrap;font-weight:600"></span>
+      </div>
+    </div>
+
+    <!-- PAGO -->
+    <div style="margin:14px 0 8px"><strong style="font-size:14px">💳 Pago</strong></div>
+    <div class="row">
+      <div class="field"><label>Forma de pago</label><select id="cot-pago" onchange="updPagoCot()">
+        <option>Efectivo</option><option>Tarjeta</option><option>Transferencia</option>
+        <option>Débito</option><option>Crédito</option><option>Mixto</option>
+      </select></div>
+      <div class="field"><label>Estado</label><select id="cot-estado">
+        <option value="pendiente">🟡 Pendiente</option>
+        <option value="pagado">🟠 Pagado</option>
+        <option value="despachado">🟢 Despachado</option>
+      </select></div>
+    </div>
+    <div id="cot-pago-desglose" style="display:none;background:#f0f9ff;border:1px solid #bae6fd;padding:10px;border-radius:8px;margin-bottom:10px">
+      <div style="font-size:10px;color:#0369a1;font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">💰 Desglose del pago mixto</div>
+      <div class="row3">
+        <div class="field"><label>Efectivo</label><input type="number" id="cot-mix-efectivo" value="0" oninput="recalcMixtoCot()"></div>
+        <div class="field"><label>Tarjeta</label><input type="number" id="cot-mix-tarjeta" value="0" oninput="recalcMixtoCot()"></div>
+        <div class="field"><label>Transferencia</label><input type="number" id="cot-mix-transferencia" value="0" oninput="recalcMixtoCot()"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Débito</label><input type="number" id="cot-mix-debito" value="0" oninput="recalcMixtoCot()"></div>
+        <div class="field"><label>Crédito</label><input type="number" id="cot-mix-credito" value="0" oninput="recalcMixtoCot()"></div>
+      </div>
+      <div style="font-size:11px;color:#0369a1;text-align:right">Suma desglose: <strong id="cot-mix-suma">$0</strong></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Monto cancelado</label><input type="number" id="cot-cancelado" value="0" oninput="recalcCot()"></div>
+      <div class="field"><label>Saldo pendiente</label><input type="number" id="cot-saldo" readonly style="background:#f5f5f4"></div>
+    </div>
+
+    <!-- DESPACHO -->
+    <div style="margin:14px 0 8px"><strong style="font-size:14px">🚚 Despacho</strong> <span class="muted" style="font-size:11px">(0 = retira en tienda)</span></div>
+    <div class="row">
+      <div class="field"><label>Despacho ($)</label><input type="number" id="cot-desp" value="0" oninput="toggleDespCot()"></div>
+      <div class="field"><label>Fecha despacho</label><input type="date" id="cot-fecha-desp"></div>
+    </div>
+    <div id="cot-desp-campos" style="display:none;background:#fef9f0;padding:10px;border-radius:8px;margin-bottom:12px">
+      <div style="font-size:11px;color:#a87f3e;font-weight:600;margin-bottom:8px;text-transform:uppercase">📍 Datos de despacho</div>
+      <div class="field"><label>Calle</label><input type="text" id="cot-calle"></div>
+      <div class="row">
+        <div class="field"><label>N° / Depto</label><input type="text" id="cot-numero"></div>
+        <div class="field"><label>Comuna</label><input type="text" id="cot-comuna"></div>
+      </div>
+      <div class="field"><label>Hora estimada</label>
+        <select id="cot-hora">
+          <option>Sin preferencia</option><option>Mañana (9:00 - 12:00)</option>
+          <option>Mediodía (12:00 - 15:00)</option><option>Tarde (15:00 - 18:00)</option>
+          <option>Noche (18:00 - 21:00)</option><option>Coordinar con cliente</option>
+        </select>
+      </div>
+    </div>
+
     <div class="field" style="margin-top:10px"><label>Notas</label><textarea id="cot-notas" rows="2"></textarea></div>
     <div style="background:#fef9f0;padding:12px;border-radius:10px;margin:12px 0;display:flex;justify-content:space-between;font-size:16px;color:#a87f3e"><strong>TOTAL:</strong><strong id="cot-total">$0</strong></div>
     <div class="modal-actions">
@@ -1065,6 +1142,7 @@ tbody tr:hover{background:var(--gold-bg)}
       <button class="btn btn-sec btn-sm" onclick="closeModal('modal-detalle')">Cerrar</button>
       <button class="btn btn-sec btn-sm" id="pdf-venta-btn">📄 Descargar</button>
       <button class="btn btn-sec btn-sm" id="print-venta-btn">🖨️ Imprimir</button>
+      <button class="btn btn-sec btn-sm" id="wa-pedido-btn">📦 Enviar pedido</button>
       <button class="btn btn-sm" id="edit-venta-btn">Editar</button>
     </div>
   </div>
@@ -2650,13 +2728,78 @@ function abrirModalCot(c){
   c=c||{};
   document.getElementById('cot-fecha').value=c.fecha||today();
   document.getElementById('cot-tipo').value=c.tipo||'min';
+  document.getElementById('cot-rut').value=c.rut||'';
+  document.getElementById('cot-empresa').value=c.empresa||'';
   document.getElementById('cot-cliente').value=c.cliente||'';
   document.getElementById('cot-tel').value=c.tel||'';
   llenarSelectVendedores('cot-vendedor',c.vendedor||'Isaías');
+  document.getElementById('cot-desc-tipo').value='$';
+  document.getElementById('cot-desc-valor').value=c.descuento||'';
+  document.getElementById('cot-cupon').value=(c.cupon||{}).codigo||'';
+  document.getElementById('cot-pago').value=c.pago||'Efectivo';
+  document.getElementById('cot-estado').value=c.estado||'pendiente';
+  const pd=c.pagoDesglose||{};
+  document.getElementById('cot-mix-efectivo').value=pd.efectivo||0;
+  document.getElementById('cot-mix-tarjeta').value=pd.tarjeta||0;
+  document.getElementById('cot-mix-transferencia').value=pd.transferencia||0;
+  document.getElementById('cot-mix-debito').value=pd.debito||0;
+  document.getElementById('cot-mix-credito').value=pd.credito||0;
+  document.getElementById('cot-cancelado').value=c.cancelado||0;
+  document.getElementById('cot-desp').value=c.desp||0;
+  document.getElementById('cot-fecha-desp').value=c.fechaDesp||today();
+  document.getElementById('cot-calle').value=c.despCalle||'';
+  document.getElementById('cot-numero').value=c.despNumero||'';
+  document.getElementById('cot-comuna').value=c.despComuna||'';
+  document.getElementById('cot-hora').value=c.despHora||'Sin preferencia';
   document.getElementById('cot-notas').value=c.notas||'';
   document.getElementById('cot-titulo').textContent=window._editCotId?'Editar cotización':'Nueva cotización';
+  updTipoVentaCot();
+  updPagoCot();
+  toggleDespCot();
   renderCotItems();
   openModal('modal-cot');
+}
+function updTipoVentaCot(){
+  const t=document.getElementById('cot-tipo').value;
+  document.getElementById('cot-rut-row').style.display=t==='may'?'block':'none';
+}
+function updPagoCot(){
+  const p=document.getElementById('cot-pago').value;
+  document.getElementById('cot-pago-desglose').style.display=p==='Mixto'?'block':'none';
+}
+function recalcMixtoCot(){
+  const g=id=>parseInt(document.getElementById(id).value)||0;
+  const suma=g('cot-mix-efectivo')+g('cot-mix-tarjeta')+g('cot-mix-transferencia')+g('cot-mix-debito')+g('cot-mix-credito');
+  document.getElementById('cot-mix-suma').textContent=fmt(suma);
+  document.getElementById('cot-cancelado').value=suma;
+  recalcCot();
+}
+function toggleDespCot(){
+  const d=parseInt(document.getElementById('cot-desp').value)||0;
+  document.getElementById('cot-desp-campos').style.display=d>0?'block':'none';
+}
+function calcDescuentoCot(sub){
+  const tEl=document.getElementById('cot-desc-tipo');
+  const vEl=document.getElementById('cot-desc-valor');
+  if(!tEl||!vEl)return 0;
+  const val=parseFloat(vEl.value)||0;
+  if(val<=0)return 0;
+  const desc=tEl.value==='%'?Math.round(sub*val/100):Math.round(val);
+  return Math.min(desc,sub);
+}
+function calcCuponCot(sub){
+  const cupEl=document.getElementById('cot-cupon');
+  const infoEl=document.getElementById('cot-cupon-info');
+  if(!cupEl)return 0;
+  const code=cupEl.value.trim();
+  if(!code){if(infoEl)infoEl.textContent='';return 0;}
+  const r=validarCupon(code,sub);
+  if(r.ok){
+    if(infoEl){infoEl.textContent='✓ −'+fmt(r.desc);infoEl.style.color='#166534';}
+    return r.desc;
+  }
+  if(infoEl){infoEl.textContent='✕ '+r.msg;infoEl.style.color='#dc2626';}
+  return 0;
 }
 function addCotItem(){window._cotItems.push({prodId:null,desc:'',qty:1,precio:0});renderCotItems();}
 function rmCotItem(i){window._cotItems.splice(i,1);renderCotItems();}
@@ -2703,23 +2846,57 @@ function selCotProd(i,id,e){
 function updCotItem(i,k,v){window._cotItems[i][k]=k==='qty'||k==='precio'?parseInt(v)||0:v;recalcCot();}
 function recalcCot(){
   const sub=(window._cotItems||[]).reduce((a,it)=>a+it.qty*it.precio,0);
-  const el=document.getElementById('cot-total');if(el)el.textContent=fmt(sub);
+  const desc=calcDescuentoCot(sub);
+  const descCupon=calcCuponCot(sub);
+  const total=Math.max(0,sub-desc-descCupon);
+  const el=document.getElementById('cot-total');if(el)el.textContent=fmt(total);
+  const infoEl=document.getElementById('cot-desc-info');
+  if(infoEl)infoEl.textContent=desc>0?`−${fmt(desc)}`:'';
+  const slEl=document.getElementById('cot-saldo'),caEl=document.getElementById('cot-cancelado');
+  if(slEl&&caEl)slEl.value=Math.max(0,total-(parseInt(caEl.value)||0));
 }
 async function guardarCotizacion(){
   const cliente=document.getElementById('cot-cliente').value.trim();
   if(!cliente){alert('Falta el cliente');return;}
   if(!window._cotItems.length){alert('Agrega al menos un producto');return;}
   const items=window._cotItems.map(it=>({...it}));
-  const total=items.reduce((a,it)=>a+it.qty*it.precio,0);
+  const sub=items.reduce((a,it)=>a+it.qty*it.precio,0);
+  const descuento=calcDescuentoCot(sub);
+  const codeCupon=document.getElementById('cot-cupon').value.trim();
+  let cupon=null,descuentoCupon=0;
+  if(codeCupon){
+    const r=validarCupon(codeCupon,sub);
+    if(r.ok){cupon={id:r.cupon.id,codigo:r.cupon.codigo};descuentoCupon=r.desc;}
+  }
+  const total=Math.max(0,sub-descuento-descuentoCupon);
+  const cancelado=parseInt(document.getElementById('cot-cancelado').value)||0;
+  let pagoDesglose=null;
+  if(document.getElementById('cot-pago').value==='Mixto'){
+    const g=id=>parseInt(document.getElementById(id).value)||0;
+    pagoDesglose={efectivo:g('cot-mix-efectivo'),tarjeta:g('cot-mix-tarjeta'),transferencia:g('cot-mix-transferencia'),debito:g('cot-mix-debito'),credito:g('cot-mix-credito')};
+  }
   const c={
     id:window._editCotId||uid(),
     fecha:document.getElementById('cot-fecha').value||today(),
     tipo:document.getElementById('cot-tipo').value,
+    rut:document.getElementById('cot-rut').value.trim(),
+    empresa:document.getElementById('cot-empresa').value.trim(),
     cliente,
     tel:document.getElementById('cot-tel').value.trim(),
     vendedor:document.getElementById('cot-vendedor').value,
+    pago:document.getElementById('cot-pago').value,
+    pagoDesglose,
+    estado:document.getElementById('cot-estado').value||'pendiente',
+    cancelado,
+    desp:parseInt(document.getElementById('cot-desp').value)||0,
+    fechaDesp:document.getElementById('cot-fecha-desp').value||today(),
+    despCalle:document.getElementById('cot-calle').value.trim(),
+    despNumero:document.getElementById('cot-numero').value.trim(),
+    despComuna:document.getElementById('cot-comuna').value.trim(),
+    despHora:document.getElementById('cot-hora').value,
     notas:document.getElementById('cot-notas').value.trim(),
-    items,total,convertida:false
+    items,subtotal:sub,descuento,descuentoCupon,cupon,
+    total,saldo:Math.max(0,total-cancelado),convertida:false
   };
   if(window._editCotId){const i=cotizaciones.findIndex(x=>String(x.id)===String(window._editCotId));if(i>=0)cotizaciones[i]=c;}
   else cotizaciones.push(c);
@@ -2738,11 +2915,13 @@ async function convertirEnVenta(id){
   if(!c)return;
   if(!(await confirmDialog('¿Convertir esta cotización en venta? Se descontará el stock.')))return;
   const v={
-    id:uid(),fecha:today(),fechaDesp:today(),estado:'pendiente',
-    tipo:c.tipo,cliente:c.cliente,rut:'',empresa:'',tel:c.tel,vendedor:c.vendedor,
-    pago:'Efectivo',desp:0,despCalle:'',despNumero:'',despComuna:'',despHora:'Sin preferencia',
-    cancelado:0,notas:c.notas,items:c.items.map(it=>({...it})),
-    subtotal:c.total,total:c.total,saldo:c.total
+    id:uid(),fecha:today(),fechaDesp:c.fechaDesp||today(),estado:c.estado||'pendiente',
+    tipo:c.tipo,cliente:c.cliente,rut:c.rut||'',empresa:c.empresa||'',tel:c.tel,vendedor:c.vendedor,
+    pago:c.pago||'Efectivo',pagoDesglose:c.pagoDesglose||null,
+    desp:c.desp||0,despCalle:c.despCalle||'',despNumero:c.despNumero||'',despComuna:c.despComuna||'',despHora:c.despHora||'Sin preferencia',
+    cancelado:c.cancelado||0,notas:c.notas,items:c.items.map(it=>({...it})),
+    subtotal:c.subtotal||c.total,descuento:c.descuento||0,descuentoCupon:c.descuentoCupon||0,cupon:c.cupon||null,
+    total:c.total,saldo:Math.max(0,c.total-(c.cancelado||0))
   };
   await descontarStockItems(v.items);
   ventas.push(v);
@@ -5230,6 +5409,26 @@ function waDespacho(id){
   const cuando=v.fechaDesp?v.fechaDesp.split('-').reverse().join('/'):'';
   abrirWa(v.tel,`Hola ${v.cliente} 👋, le escribimos de DreamRest para coordinar la entrega de su pedido${cuando?` para el ${cuando}`:''}${dir?` en ${dir}`:''}. ¿Nos confirma si estará disponible? ¡Gracias! 🚚`);
 }
+function waPedido(id){
+  const v=ventas.find(x=>String(x.id)===String(id));if(!v)return;
+  const fechaFmt=v.fecha.split('-').reverse().join('/');
+  let msg=`Hola ${v.cliente} 👋, te escribimos de DreamRest con el detalle de tu pedido del ${fechaFmt}:\n\n`;
+  v.items.forEach(it=>{
+    const nom=it.desc||((inventario.find(p=>p.id===it.prodId)||{}).nombre)||'Producto';
+    msg+=`• ${nom} x${it.qty} — ${fmt(it.qty*it.precio)}\n`;
+  });
+  if(v.descuento>0)msg+=`Descuento aplicado: -${fmt(v.descuento)}\n`;
+  if((v.descuentoCupon||0)>0)msg+=`Cupón ${((v.cupon||{}).codigo||'')}: -${fmt(v.descuentoCupon)}\n`;
+  msg+=`\n*Total: ${fmt(v.total)}*\n`;
+  if(v.saldo>0)msg+=`Saldo pendiente: ${fmt(v.saldo)} (pagado ${fmt(v.cancelado)})\n`;
+  if(v.desp>0){
+    const dir=[v.despCalle,v.despNumero,v.despComuna].filter(Boolean).join(', ')||v.dir||'';
+    const cuando=v.fechaDesp?v.fechaDesp.split('-').reverse().join('/'):'';
+    msg+=`\n🚚 Despacho${cuando?` el ${cuando}`:''}${dir?` a ${dir}`:''}. Se cancela en efectivo directamente al chofer del camión (servicio externo, no facturado por DreamRest).\n`;
+  }
+  msg+=`\n¡Gracias por tu preferencia! 🙏 DreamRest`;
+  abrirWa(v.tel,msg);
+}
 
 // Cambio de estado rápido desde la tarjeta (sin abrir el detalle)
 async function cambiarEstadoRapido(id,nuevo){
@@ -6025,6 +6224,7 @@ function viewVenta(id){
   document.getElementById('edit-venta-btn').onclick=()=>{closeModal('modal-detalle');editVenta(id)};
   document.getElementById('print-venta-btn').onclick=()=>{window._autoPrint=false;imprimirVenta(id)};
   document.getElementById('pdf-venta-btn').onclick=()=>descargarPedidoHTML();
+  document.getElementById('wa-pedido-btn').onclick=()=>waPedido(id);
 
   // Botones rápidos de estado
   const actEl=document.getElementById('det-acciones-rapidas');
@@ -6630,6 +6830,7 @@ function renderVentas(){
         ${est==='pendiente'?`<button class="qa" onclick="cambiarEstadoRapido('${v.id}','pagado')">🟠 Pagado</button>`:''}
         ${(est==='pendiente'||est==='pagado')?`<button class="qa" onclick="cambiarEstadoRapido('${v.id}','despachado')">🟢 Despachado</button>`:''}
         ${v.tel?`<button class="qa wa" onclick="waWhatsApp('${v.id}')">📱 WhatsApp</button>`:''}
+        ${v.tel?`<button class="qa wa" onclick="waPedido('${v.id}')">📦 Enviar pedido</button>`:''}
         <button class="qa" onclick="imprimirVenta('${v.id}')">🖨️ Imprimir</button>
       </div>
     </div>`;
@@ -7351,13 +7552,14 @@ Object.assign(window,{
   limpiarFiltrosVentas,cambiarEstado,cambiarEstadoDetalle,registrarAbono,resetearInventario,
   editarAbono,borrarAbono,abrirRegistroAbonos,renderRegistroAbonos,
   renderSaldos,abonarSaldo,pagarTotalSaldo,refrescarVistaActiva,actualizarBadges,
-  cambiarEstadoRapido,waWhatsApp,waCobro,waDespacho,
+  cambiarEstadoRapido,waWhatsApp,waCobro,waDespacho,waPedido,
   iniciarTour,tourSiguiente,tourAnterior,cerrarTour,exportarRespaldo,
   abrirRecompra,renderRecompra,marcarRecompraContactada,waRecompra,
   guardarMetaVendedor,
   verFichaCliente,agregarProductosManuales,canjearPuntos,
   renderCotizaciones,nuevaCotizacion,editarCotizacion,addCotItem,rmCotItem,updCotItem,renderCotItems,
   autocompleteCot,selCotProd,guardarCotizacion,eliminarCotizacion,convertirEnVenta,imprimirCotizacion,
+  recalcCot,updTipoVentaCot,updPagoCot,recalcMixtoCot,toggleDespCot,
   exportInv,exportVentas,openModal,closeModal,
   confirmDialog,formDialog,_resolveConfirm,_resolveFormDialog,_submitFormDialog,
   abrirImportar,handleImportDrop,handleImportSelect,confirmarImport,descargarPlantilla,cargarHojaImport,
