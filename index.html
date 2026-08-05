@@ -463,6 +463,7 @@ tbody tr:hover{background:var(--gold-bg)}
       <button class="btn btn-sm" style="background:#166534" onclick="abrirImportar()">📊 Importar Excel</button>
       <button class="btn btn-sec btn-sm" onclick="abrirReposicion()" style="border-color:#b45309;color:#b45309">📋 Reposición</button>
       <button class="btn btn-sec btn-sm" onclick="exportInv()">📥 Exportar</button>
+      <button class="btn btn-sec btn-sm" onclick="generarCatalogoPDF()" style="border-color:#a87f3e;color:#a87f3e">🗂️ Catálogo PDF</button>
       <button class="btn btn-sec btn-sm" onclick="resetearInventario()" style="border-color:#dc2626;color:#dc2626">🔄 Resetear</button>
     </div>
     <div id="inv-stats" class="stat-grid"></div>
@@ -752,6 +753,11 @@ tbody tr:hover{background:var(--gold-bg)}
   <div class="modal">
     <h3 id="prod-title">Agregar producto</h3>
     <div class="field"><label>Nombre</label><input type="text" id="p-nombre"></div>
+    <div class="field">
+      <label>Foto del producto (opcional)</label>
+      <input type="file" accept="image/*" id="p-foto-input" onchange="handleFotoProd(this)">
+      <div id="p-foto-preview" style="margin-top:8px"></div>
+    </div>
     <div class="row">
       <div class="field"><label>Marca</label><input type="text" id="p-marca" list="marca-list"></div>
       <div class="field"><label>Categoría</label><select id="p-cat">
@@ -4202,6 +4208,44 @@ function handleFotoCompra(input){
   };
   reader.readAsDataURL(file);
 }
+function handleFotoProd(input){
+  const file=input.files[0];
+  if(!file)return;
+  const reader=new FileReader();
+  reader.onload=e=>{
+    const img=new Image();
+    img.onload=()=>{
+      // Comprimir: máx 500px de ancho, JPEG calidad 0.7
+      const canvas=document.createElement('canvas');
+      const maxW=500;
+      const scale=Math.min(1,maxW/img.width);
+      canvas.width=Math.round(img.width*scale);
+      canvas.height=Math.round(img.height*scale);
+      const ctx=canvas.getContext('2d');
+      ctx.drawImage(img,0,0,canvas.width,canvas.height);
+      let dataUrl=canvas.toDataURL('image/jpeg',0.7);
+      if(dataUrl.length>500000)dataUrl=canvas.toDataURL('image/jpeg',0.4);
+      if(dataUrl.length>700000){alert('La foto es demasiado grande incluso comprimida. Intenta con otra.');return;}
+      window._prodFotoData=dataUrl;
+      renderFotoProdPreview();
+    };
+    img.src=e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+function renderFotoProdPreview(){
+  const el=document.getElementById('p-foto-preview');
+  if(!el)return;
+  el.innerHTML=window._prodFotoData
+    ?`<div style="position:relative;display:inline-block"><img src="${window._prodFotoData}" style="width:90px;height:90px;object-fit:cover;border-radius:8px;border:1px solid #e7e5e4"><button type="button" onclick="quitarFotoProd()" style="position:absolute;top:-6px;right:-6px;width:20px;height:20px;border-radius:50%;background:#dc2626;color:#fff;border:none;font-size:12px;cursor:pointer;line-height:1">✕</button></div>`
+    :'';
+}
+function quitarFotoProd(){
+  window._prodFotoData=null;
+  const input=document.getElementById('p-foto-input');
+  if(input)input.value='';
+  renderFotoProdPreview();
+}
 function calcSugerenciaCompra(){
   const monto=parseInt(document.getElementById('comp-monto').value)||0;
   const conIVA=document.getElementById('comp-iva').checked;
@@ -5695,10 +5739,13 @@ function renderInv(){
       const stockTxt=stock<=0?'Sin stock':stock<=minStock?`${stock} u (bajo)`:`${stock} u`;
       html+=`<div class="card">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
-          <div style="flex:1;cursor:pointer" onclick="editProd('${p.id}')">
-            <h4>${p.nombre}</h4>
-            <div style="margin-top:3px"><span class="pill">${p.marca||'—'}</span> <span class="tag ${stockTag}">${stockTxt}</span></div>
-            ${p.notas?`<div class="muted" style="font-size:11px;margin-top:4px;font-style:italic">${p.notas}</div>`:''}
+          <div style="display:flex;gap:8px;flex:1;cursor:pointer" onclick="editProd('${p.id}')">
+            ${p.foto?`<img src="${p.foto}" style="width:44px;height:44px;object-fit:cover;border-radius:8px;flex-shrink:0;border:1px solid #e7e5e4">`:`<div style="width:44px;height:44px;background:var(--gold-bg);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;color:var(--gold)">🛏️</div>`}
+            <div style="flex:1">
+              <h4>${p.nombre}</h4>
+              <div style="margin-top:3px"><span class="pill">${p.marca||'—'}</span> <span class="tag ${stockTag}">${stockTxt}</span></div>
+              ${p.notas?`<div class="muted" style="font-size:11px;margin-top:4px;font-style:italic">${p.notas}</div>`:''}
+            </div>
           </div>
           <div style="text-align:right;flex-shrink:0">
             <div style="font-size:11px;color:#a87f3e">May ${fmt(p.may||0)}</div>
@@ -5720,6 +5767,9 @@ async function openProd(){
   editProdId=null;
   document.getElementById('prod-title').textContent='Agregar producto';
   document.getElementById('p-nombre').value='';
+  document.getElementById('p-foto-input').value='';
+  window._prodFotoData=null;
+  renderFotoProdPreview();
   document.getElementById('p-marca').value='';
   document.getElementById('p-cat').value='Colchón';
   document.getElementById('p-may').value='';
@@ -5740,6 +5790,9 @@ async function editProd(id){
   editProdId=id;
   document.getElementById('prod-title').textContent='Editar producto';
   document.getElementById('p-nombre').value=p.nombre;
+  document.getElementById('p-foto-input').value='';
+  window._prodFotoData=p.foto||null;
+  renderFotoProdPreview();
   document.getElementById('p-marca').value=p.marca||'';
   document.getElementById('p-cat').value=p.cat||'Otro';
   document.getElementById('p-may').value=p.may||'';
@@ -5758,6 +5811,7 @@ async function saveProd(){
   if(!nombre){alert('El nombre es obligatorio');return}
   const data={
     nombre,
+    foto:window._prodFotoData||null,
     marca:document.getElementById('p-marca').value.trim(),
     cat:document.getElementById('p-cat').value,
     may:parseInt(document.getElementById('p-may').value)||0,
@@ -6305,9 +6359,7 @@ function descargarPDFVenta(id){
   doc.setFontSize(16);
   doc.setFont('helvetica','normal');
   doc.setTextColor(...dark);
-  doc.setLetterSpacing(3);
-  doc.text('PEDIDO',M,y);
-  doc.setLetterSpacing(0);
+  doc.text('P E D I D O',M,y);
   y+=10;
 
   // Separador
@@ -7509,6 +7561,126 @@ function exportInv(){
   downloadCSV('inventario_dreamrest_'+today()+'.csv',csv.join('\n'));
 }
 
+function generarCatalogoPDF(){
+  const q=(document.getElementById('inv-search').value||'').toLowerCase();
+  const fm=document.getElementById('inv-marca').value;
+  const fc=document.getElementById('inv-cat').value;
+  const items=inventario.filter(p=>{
+    if(p.combo&&p.combo.colchonId)return false; // tarifas promocionales, no son productos físicos
+    if(q&&!(p.nombre+' '+(p.marca||'')).toLowerCase().includes(q))return false;
+    if(fm&&p.marca!==fm)return false;
+    if(fc&&p.cat!==fc)return false;
+    return true;
+  }).sort((a,b)=>(a.cat||'').localeCompare(b.cat||'')||(a.marca||'').localeCompare(b.marca||'')||a.nombre.localeCompare(b.nombre));
+  if(!items.length){alert('No hay productos para incluir en el catálogo (revisa los filtros de búsqueda/marca/categoría).');return;}
+
+  const {jsPDF}=window.jspdf;
+  const doc=new jsPDF({unit:'mm',format:'a4'});
+  const W=210,H=297,M=16;
+  const gold=[168,127,62],dark=[28,25,23],gray=[120,113,108],cream=[250,247,241],azul=[30,64,175];
+  const green=[22,101,52],orange=[154,52,18],red=[220,38,38];
+
+  const cols=2,rows=3,gapX=6,gapY=6;
+  const cardW=(W-2*M-gapX)/cols;
+  const headerH=22,footerH=10;
+  const gridTop=M+headerH;
+  const cardH=(H-gridTop-M-footerH-gapY*(rows-1))/rows;
+  const perPage=cols*rows;
+  const totalPages=Math.ceil(items.length/perPage);
+
+  function drawHeader(pageNum){
+    let y=M;
+    doc.setDrawColor(...gold);doc.setLineWidth(0.7);doc.line(M,y,W-M,y);y+=7;
+    doc.setFont('helvetica','bold');doc.setFontSize(19);doc.setTextColor(...gold);
+    doc.text('Dream Rest',M,y+4);
+    doc.setFont('helvetica','normal');doc.setFontSize(10);doc.setTextColor(...dark);
+    doc.text('C A T Á L O G O   D E   P R O D U C T O S',W-M,y+4,{align:'right'});
+    y+=9;
+    doc.setDrawColor(230,229,228);doc.setLineWidth(0.3);doc.line(M,y,W-M,y);
+    y+=4.5;
+    doc.setFontSize(7.5);doc.setTextColor(...gray);doc.setFont('helvetica','normal');
+    doc.text(today().split('-').reverse().join('/')+'  ·  '+items.length+' producto'+(items.length===1?'':'s'),M,y);
+    doc.text('Página '+pageNum+' de '+totalPages,W-M,y,{align:'right'});
+  }
+  function drawFooter(){
+    const y=H-9;
+    doc.setDrawColor(...gold);doc.setLineWidth(0.5);doc.line(M,y,W-M,y);
+    doc.setFontSize(7);doc.setTextColor(...gray);doc.setFont('helvetica','normal');
+    doc.text('+56 9 9552 0054  ·  ventas@dreamrest.cl  ·  www.dreamrest.cl',M,y+4);
+  }
+  function addImgFit(dataUrl,x,y,boxW,boxH){
+    try{
+      const props=doc.getImageProperties(dataUrl);
+      const ratio=Math.min(boxW/props.width,boxH/props.height);
+      const w=props.width*ratio,h=props.height*ratio;
+      doc.addImage(dataUrl,'JPEG',x+(boxW-w)/2,y+(boxH-h)/2,w,h);
+    }catch(e){}
+  }
+  const fmtNum=n=>'$'+Math.round(n||0).toLocaleString('es-CL');
+
+  items.forEach((p,i)=>{
+    const idxInPage=i%perPage;
+    if(idxInPage===0){
+      if(i>0)doc.addPage();
+      drawHeader(Math.floor(i/perPage)+1);
+      drawFooter();
+    }
+    const col=idxInPage%cols,row=Math.floor(idxInPage/cols);
+    const x=M+col*(cardW+gapX);
+    const y=gridTop+row*(cardH+gapY);
+    const padd=4;
+
+    // Tarjeta suave
+    doc.setFillColor(...cream);
+    doc.setDrawColor(231,229,228);
+    doc.setLineWidth(0.25);
+    doc.roundedRect(x,y,cardW,cardH,2.5,2.5,'FD');
+
+    // Foto
+    const photoH=cardH*0.52;
+    doc.setFillColor(255,255,255);
+    doc.roundedRect(x+padd,y+padd,cardW-2*padd,photoH,2,2,'F');
+    if(p.foto){
+      addImgFit(p.foto,x+padd,y+padd,cardW-2*padd,photoH);
+    }else{
+      doc.setFontSize(8);doc.setTextColor(...gray);doc.setFont('helvetica','italic');
+      doc.text('Sin imagen',x+cardW/2,y+padd+photoH/2,{align:'center'});
+    }
+
+    let ty=y+padd+photoH+6;
+    doc.setFont('helvetica','bold');doc.setFontSize(9.5);doc.setTextColor(...dark);
+    const nomLines=doc.splitTextToSize(p.nombre,cardW-2*padd).slice(0,2);
+    doc.text(nomLines,x+padd,ty);
+    ty+=nomLines.length*4.2+1.5;
+
+    doc.setFont('helvetica','normal');doc.setFontSize(7.5);doc.setTextColor(...gray);
+    doc.text([p.marca,p.cat].filter(Boolean).join('  ·  '),x+padd,ty);
+    ty+=5.5;
+
+    doc.setFontSize(8);
+    doc.setFont('helvetica','normal');doc.setTextColor(...gray);
+    doc.text('Mayorista',x+padd,ty);
+    doc.setFont('helvetica','bold');doc.setTextColor(...gold);
+    doc.text(fmtNum(p.may),x+padd+22,ty);
+
+    const stock=parseInt(p.stock)||0;
+    const minStock=parseInt(p.minStock)||2;
+    const stockColor=stock<=0?red:stock<=minStock?orange:green;
+    const stockTxt=stock<=0?'Sin stock':stock+' u.';
+    doc.setFontSize(7);doc.setFont('helvetica','bold');doc.setTextColor(...stockColor);
+    doc.text(stockTxt,x+cardW-padd,ty,{align:'right'});
+    ty+=4.3;
+
+    doc.setFontSize(8);
+    doc.setFont('helvetica','normal');doc.setTextColor(...gray);
+    doc.text('Minorista',x+padd,ty);
+    doc.setFont('helvetica','bold');doc.setTextColor(...azul);
+    doc.text(fmtNum(p.min),x+padd+22,ty);
+  });
+
+  doc.save('catalogo_dreamrest_'+today()+'.pdf');
+}
+
 function exportVentas(){
   const csv=['Fecha,Cliente,Tipo,Vendedor,Pago,Productos,Subtotal,Despacho,Total venta,Pagado,Saldo,Notas'];
   ventas.forEach(v=>{
@@ -7571,6 +7743,7 @@ Object.assign(window,{
   abrirEmpleado,eliminarEmpleado,registrarEventoRRHH,eliminarEventoRRHH,
   renderCalculadora,updInsumoCalc,aplicarCostosInventario,guardarConfigCalculadora,restaurarInsumosDefault,
   handleFotoCompra,calcSugerenciaCompra,verFotoCompra,
+  handleFotoProd,quitarFotoProd,generarCatalogoPDF,
   abrirReposicion,renderReposicion,copiarListaReposicion,exportReposicion,
   imprimirVenta,descargarPedidoHTML,
   autocompleteCliente,selCliente,solicitarNotificaciones,
