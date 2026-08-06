@@ -464,6 +464,7 @@ tbody tr:hover{background:var(--gold-bg)}
       <button class="btn btn-sec btn-sm" onclick="abrirReposicion()" style="border-color:#b45309;color:#b45309">📋 Reposición</button>
       <button class="btn btn-sec btn-sm" onclick="exportInv()">📥 Exportar</button>
       <button class="btn btn-sec btn-sm" onclick="generarCatalogoPDF()" style="border-color:#a87f3e;color:#a87f3e">🗂️ Catálogo PDF</button>
+      <button class="btn btn-sec btn-sm" onclick="compartirCatalogoWhatsApp()" style="border-color:#166534;color:#166534">📱 Catálogo por WhatsApp</button>
       <button class="btn btn-sec btn-sm" onclick="resetearInventario()" style="border-color:#dc2626;color:#dc2626">🔄 Resetear</button>
     </div>
     <div id="inv-stats" class="stat-grid"></div>
@@ -755,12 +756,12 @@ tbody tr:hover{background:var(--gold-bg)}
     <div class="field"><label>Nombre</label><input type="text" id="p-nombre"></div>
     <div class="field">
       <label>Foto del producto (opcional)</label>
-      <input type="file" accept="image/*" id="p-foto-input" onchange="handleFotoProd(this)">
+      <input type="file" accept="image/*" capture="environment" id="p-foto-input" onchange="handleFotoProd(this)">
       <div id="p-foto-preview" style="margin-top:8px"></div>
     </div>
     <div class="row">
       <div class="field"><label>Marca</label><input type="text" id="p-marca" list="marca-list"></div>
-      <div class="field"><label>Categoría</label><select id="p-cat">
+      <div class="field"><label>Categoría</label><select id="p-cat" onchange="toggleCamposColchon()">
         <option>Colchón</option><option>Cama Europea</option><option>Cama Baúl</option>
         <option>Base</option><option>Almohada</option><option>Plumón</option>
         <option>Velador</option><option>Respaldo</option><option>Otro</option>
@@ -768,8 +769,19 @@ tbody tr:hover{background:var(--gold-bg)}
     </div>
     <datalist id="marca-list"></datalist>
     <div class="row">
-      <div class="field"><label>Precio mayorista</label><input type="number" id="p-may"></div>
-      <div class="field"><label>Precio minorista</label><input type="number" id="p-min"></div>
+      <div class="field"><label>Precio mayorista <span style="text-transform:none;font-weight:400">— solo colchón</span></label><input type="number" id="p-may"></div>
+      <div class="field"><label>Precio minorista <span style="text-transform:none;font-weight:400">— solo colchón</span></label><input type="number" id="p-min"></div>
+    </div>
+    <div id="p-colchon-armados" style="display:none">
+      <div class="muted" style="font-size:11px;margin:6px 0 4px">Precio armado (con base / con base y respaldo) para el catálogo y Nueva Venta. Vacío = se calcula automático.</div>
+      <div class="row">
+        <div class="field"><label>Con base — mayorista</label><input type="number" id="p-base-may" placeholder="Automático"></div>
+        <div class="field"><label>Con base — minorista</label><input type="number" id="p-base-min" placeholder="Automático"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Con base y respaldo — mayorista</label><input type="number" id="p-baseresp-may" placeholder="Automático"></div>
+        <div class="field"><label>Con base y respaldo — minorista</label><input type="number" id="p-baseresp-min" placeholder="Automático"></div>
+      </div>
     </div>
     <div class="row">
       <div class="field"><label>Valor referencial ("antes") <span style="text-transform:none;font-weight:400">— opcional, para mostrar descuento</span></label><input type="number" id="p-ref" placeholder="Ej: 199990"></div>
@@ -2084,6 +2096,13 @@ function esColchonDreamRest(p){
   if(!p)return false;
   return p.marca==='DreamRest'&&p.cat==='Colchón'&&(p.nombre.toLowerCase().includes('infinity')||p.nombre.toLowerCase().includes('soft'));
 }
+// Ítems tipo "Cama X + base + respaldo Y" que Nueva Venta crea solos al vender algo escrito a mano:
+// su precio YA es el combo completo, así que no hay que sumarles base/respaldo de nuevo.
+function esComboArmadoManual(p){
+  if(!p)return false;
+  const n=(p.nombre||'').toLowerCase();
+  return n.includes('base')||n.includes('respaldo');
+}
 // Busca la cama europea DreamRest asociada a un colchón (mismo combo.colchonId)
 function camaEuropeaDeColchon(colchonId){
   return inventario.find(p=>p.combo&&String(p.combo.colchonId)===String(colchonId));
@@ -2132,7 +2151,7 @@ function renderItemsNV(){
   window._nvItems.forEach((it,i)=>{
     const nombreActual=it.desc||'';
     const prod=it.prodId?inventario.find(p=>String(p.id)===String(it.prodId)):null;
-    const esColchon=prod&&prod.cat==='Colchón';
+    const esColchon=prod&&prod.cat==='Colchón'&&!esComboArmadoManual(prod);
     const esCamaCombo=prod&&prod.combo&&prod.combo.colchonId; // Cama Europea DreamRest
     const armado=it.armado||'solo';
 
@@ -2213,10 +2232,14 @@ function recalcularPrecioItemNV(i){
   let precio=tipo==='may'?prod.may:prod.min;
   it.precioNormal=null;
 
+  const fijo=it.armado==='base'?(tipo==='may'?prod.baseMay:prod.baseMin):it.armado==='baseresp'?(tipo==='may'?prod.baseRespMay:prod.baseRespMin):null;
   if(it.armado==='solo'){
     const pc=precioConPromo(prod,tipo);
     precio=pc.precio;
     if(pc.promo)it.precioNormal=pc.normal;
+  }else if(fijo){
+    // Precio fijado a mano en la ficha del producto (pantalla de Inventario) tiene prioridad
+    precio=fijo;
   }else if(esColchonDreamRest(prod)&&(it.armado==='base'||it.armado==='baseresp')){
     // DreamRest: usar precio promocional de cama europea
     const cama=camaEuropeaDeColchon(prod.id);
@@ -4182,25 +4205,36 @@ function abrirCompra(){
   document.getElementById('comp-sugerencia').innerHTML='';
   openModal('modal-compra');
 }
+// Comprime una foto hasta que pese menos que limiteBytes, bajando primero la calidad y
+// luego la resolución. Fotos de celular (iPhone y otros) pueden pesar 10-40MB sin comprimir,
+// así que hacen falta varios intentos en vez de rendirse a la primera.
+function comprimirImagen(img,maxW,limiteBytes){
+  const canvas=document.createElement('canvas');
+  const ctx=canvas.getContext('2d');
+  const anchos=[maxW,Math.round(maxW*0.7),Math.round(maxW*0.5),Math.round(maxW*0.3)];
+  for(const w of anchos){
+    const scale=Math.min(1,w/img.width);
+    canvas.width=Math.round(img.width*scale)||1;
+    canvas.height=Math.round(img.height*scale)||1;
+    ctx.drawImage(img,0,0,canvas.width,canvas.height);
+    for(const q of [0.7,0.5,0.35,0.2]){
+      const dataUrl=canvas.toDataURL('image/jpeg',q);
+      if(dataUrl.length<=limiteBytes)return dataUrl;
+    }
+  }
+  return null;
+}
 function handleFotoCompra(input){
   const file=input.files[0];
   if(!file)return;
   const reader=new FileReader();
+  reader.onerror=()=>alert('No se pudo leer la foto. Intenta con otra.');
   reader.onload=e=>{
     const img=new Image();
+    img.onerror=()=>alert('No se pudo procesar esa foto. Intenta con otra.');
     img.onload=()=>{
-      // Comprimir: máx 900px de ancho, JPEG calidad 0.6
-      const canvas=document.createElement('canvas');
-      const maxW=900;
-      const scale=Math.min(1,maxW/img.width);
-      canvas.width=Math.round(img.width*scale);
-      canvas.height=Math.round(img.height*scale);
-      const ctx=canvas.getContext('2d');
-      ctx.drawImage(img,0,0,canvas.width,canvas.height);
-      let dataUrl=canvas.toDataURL('image/jpeg',0.6);
-      // Si sigue muy pesada, bajar calidad
-      if(dataUrl.length>700000)dataUrl=canvas.toDataURL('image/jpeg',0.35);
-      if(dataUrl.length>900000){alert('La foto es demasiado grande incluso comprimida. Intenta con otra.');return;}
+      const dataUrl=comprimirImagen(img,900,900000);
+      if(!dataUrl){alert('La foto es demasiado pesada incluso comprimida al máximo. Prueba con otra o recórtala antes de subirla.');return;}
       window._compraFoto=dataUrl;
       document.getElementById('comp-foto-preview').innerHTML=`<img src="${dataUrl}" style="max-width:120px;max-height:120px;border-radius:8px;border:1px solid #e7e5e4;margin-top:6px">`;
     };
@@ -4212,20 +4246,13 @@ function handleFotoProd(input){
   const file=input.files[0];
   if(!file)return;
   const reader=new FileReader();
+  reader.onerror=()=>alert('No se pudo leer la foto. Intenta con otra.');
   reader.onload=e=>{
     const img=new Image();
+    img.onerror=()=>alert('No se pudo procesar esa foto. Intenta con otra.');
     img.onload=()=>{
-      // Comprimir: máx 500px de ancho, JPEG calidad 0.7
-      const canvas=document.createElement('canvas');
-      const maxW=500;
-      const scale=Math.min(1,maxW/img.width);
-      canvas.width=Math.round(img.width*scale);
-      canvas.height=Math.round(img.height*scale);
-      const ctx=canvas.getContext('2d');
-      ctx.drawImage(img,0,0,canvas.width,canvas.height);
-      let dataUrl=canvas.toDataURL('image/jpeg',0.7);
-      if(dataUrl.length>500000)dataUrl=canvas.toDataURL('image/jpeg',0.4);
-      if(dataUrl.length>700000){alert('La foto es demasiado grande incluso comprimida. Intenta con otra.');return;}
+      const dataUrl=comprimirImagen(img,500,600000);
+      if(!dataUrl){alert('La foto es demasiado pesada incluso comprimida al máximo. Prueba con otra o recórtala antes de subirla.');return;}
       window._prodFotoData=dataUrl;
       renderFotoProdPreview();
     };
@@ -5677,9 +5704,12 @@ function fillFiltrosInv(){
   const sm=document.getElementById('inv-marca');
   const sc=document.getElementById('inv-cat');
   const dm=document.getElementById('marca-list');
+  const prevMarca=sm.value,prevCat=sc.value; // reconstruir las opciones no debe borrar lo que el usuario eligió
   sm.innerHTML='<option value="">Todas las marcas</option>'+marcas.map(m=>`<option>${m}</option>`).join('');
   sc.innerHTML='<option value="">Todas las categorías</option>'+cats.map(c=>`<option>${c}</option>`).join('');
   dm.innerHTML=marcas.map(m=>`<option>${m}</option>`).join('');
+  sm.value=prevMarca;
+  sc.value=prevCat;
 }
 
 function renderInv(){
@@ -5774,12 +5804,17 @@ async function openProd(){
   document.getElementById('p-cat').value='Colchón';
   document.getElementById('p-may').value='';
   document.getElementById('p-min').value='';
+  document.getElementById('p-base-may').value='';
+  document.getElementById('p-base-min').value='';
+  document.getElementById('p-baseresp-may').value='';
+  document.getElementById('p-baseresp-min').value='';
   document.getElementById('p-ref').value='';
   document.getElementById('p-costo').value='';
   document.getElementById('p-stock').value='0';
   document.getElementById('p-min-stock').value='2';
   document.getElementById('p-notas').value='';
   document.getElementById('del-prod-btn').style.display='none';
+  toggleCamposColchon();
   openModal('modal-prod');
 }
 
@@ -5797,15 +5832,28 @@ async function editProd(id){
   document.getElementById('p-cat').value=p.cat||'Otro';
   document.getElementById('p-may').value=p.may||'';
   document.getElementById('p-min').value=p.min||'';
+  document.getElementById('p-base-may').value=p.baseMay||'';
+  document.getElementById('p-base-min').value=p.baseMin||'';
+  document.getElementById('p-baseresp-may').value=p.baseRespMay||'';
+  document.getElementById('p-baseresp-min').value=p.baseRespMin||'';
   document.getElementById('p-ref').value=p.ref||'';
   document.getElementById('p-costo').value=p.costo||'';
   document.getElementById('p-stock').value=p.stock||0;
   document.getElementById('p-min-stock').value=p.minStock||2;
   document.getElementById('p-notas').value=p.notas||'';
   document.getElementById('del-prod-btn').style.display='inline-block';
+  toggleCamposColchon();
   openModal('modal-prod');
 }
+function toggleCamposColchon(){
+  const el=document.getElementById('p-colchon-armados');
+  if(el)el.style.display=document.getElementById('p-cat').value==='Colchón'?'':'none';
+}
 
+function numOrNull(id){
+  const v=document.getElementById(id).value;
+  return v===''?null:(parseInt(v)||0);
+}
 async function saveProd(){
   const nombre=document.getElementById('p-nombre').value.trim();
   if(!nombre){alert('El nombre es obligatorio');return}
@@ -5816,6 +5864,10 @@ async function saveProd(){
     cat:document.getElementById('p-cat').value,
     may:parseInt(document.getElementById('p-may').value)||0,
     min:parseInt(document.getElementById('p-min').value)||0,
+    baseMay:numOrNull('p-base-may'),
+    baseMin:numOrNull('p-base-min'),
+    baseRespMay:numOrNull('p-baseresp-may'),
+    baseRespMin:numOrNull('p-baseresp-min'),
     ref:parseInt(document.getElementById('p-ref').value)||0,
     costo:parseInt(document.getElementById('p-costo').value)||0,
     stock:parseInt(document.getElementById('p-stock').value)||0,
@@ -7561,34 +7613,90 @@ function exportInv(){
   downloadCSV('inventario_dreamrest_'+today()+'.csv',csv.join('\n'));
 }
 
-function generarCatalogoPDF(){
+// Precio de un colchón según cómo se arma (solo / con base / con base y respaldo),
+// usando la misma lógica de armados que Nueva Venta (combos DreamRest, precio de base por
+// tamaño, y el respaldo más económico disponible como estimación cuando el respaldo se elige
+// al momento de vender). esEstimado=true cuando el precio de "+ Base y Respaldo" es un "desde"
+// porque el respaldo exacto no está fijado (marcas que no son DreamRest).
+function precioArmadoColchon(p,armado,tipo){
+  const tam=detectarTamano(p.nombre);
+  if(armado==='solo')return{precio:precioConPromo(p,tipo).precio,estimado:false};
+  // Precio fijado a mano en la ficha del producto (Con base / Con base y respaldo) tiene prioridad
+  const fijo=armado==='base'?(tipo==='may'?p.baseMay:p.baseMin):(tipo==='may'?p.baseRespMay:p.baseRespMin);
+  if(fijo){
+    const pp=promoArmado(p.id,armado,tipo);
+    return{precio:(pp&&pp<fijo)?pp:fijo,estimado:false};
+  }
+  let precio,estimado=false;
+  if(esColchonDreamRest(p)){
+    const cama=camaEuropeaDeColchon(p.id);
+    precio=cama?(tipo==='may'?cama.may:cama.min):(tipo==='may'?p.may:p.min)+precioBasePorTamano(tam,tipo);
+  }else{
+    precio=(tipo==='may'?p.may:p.min)+precioBasePorTamano(tam,tipo);
+    if(armado==='baseresp'){
+      const resps=respaldosPorTamano(tam).filter(r=>(parseInt(r.stock)||0)>0);
+      if(resps.length){
+        const barato=resps.reduce((a,b)=>((tipo==='may'?b.may:b.min)<(tipo==='may'?a.may:a.min)?b:a));
+        precio+=(tipo==='may'?barato.may:barato.min);
+        estimado=true;
+      }else{
+        return null; // sin respaldo disponible de ese tamaño: no mostrar esta fila
+      }
+    }
+  }
+  const pp=promoArmado(p.id,armado,tipo);
+  if(pp&&pp<precio){precio=pp;estimado=false;}
+  return{precio,estimado};
+}
+
+// Arma el PDF del catálogo y devuelve el objeto jsPDF sin guardarlo (null si no hay productos),
+// para poder tanto descargarlo como compartirlo (WhatsApp) desde la misma construcción.
+function construirCatalogoPDF(){
   const q=(document.getElementById('inv-search').value||'').toLowerCase();
   const fm=document.getElementById('inv-marca').value;
   const fc=document.getElementById('inv-cat').value;
   const items=inventario.filter(p=>{
     if(p.combo&&p.combo.colchonId)return false; // tarifas promocionales, no son productos físicos
+    if((parseInt(p.stock)||0)<=0)return false; // catálogo solo muestra lo que hay disponible
     if(q&&!(p.nombre+' '+(p.marca||'')).toLowerCase().includes(q))return false;
     if(fm&&p.marca!==fm)return false;
     if(fc&&p.cat!==fc)return false;
     return true;
-  }).sort((a,b)=>(a.cat||'').localeCompare(b.cat||'')||(a.marca||'').localeCompare(b.marca||'')||a.nombre.localeCompare(b.nombre));
-  if(!items.length){alert('No hay productos para incluir en el catálogo (revisa los filtros de búsqueda/marca/categoría).');return;}
+  });
+  if(!items.length){alert('No hay productos con stock disponible para incluir en el catálogo (revisa los filtros de búsqueda/marca/categoría).');return null;}
+
+  const CAT_ORDEN=['Colchón','Cama Europea','Cama Baúl','Base','Almohada','Plumón','Velador','Respaldo','Otro'];
+  const grupos={};
+  items.forEach(p=>{const c=p.cat||'Otro';(grupos[c]=grupos[c]||[]).push(p);});
+  const categorias=Object.keys(grupos).sort((a,b)=>{
+    const ia=CAT_ORDEN.indexOf(a),ib=CAT_ORDEN.indexOf(b);
+    if(ia===-1&&ib===-1)return a.localeCompare(b);
+    if(ia===-1)return 1;
+    if(ib===-1)return -1;
+    return ia-ib;
+  });
+  categorias.forEach(c=>grupos[c].sort((a,b)=>(a.marca||'').localeCompare(b.marca||'')||a.nombre.localeCompare(b.nombre)));
 
   const {jsPDF}=window.jspdf;
   const doc=new jsPDF({unit:'mm',format:'a4'});
   const W=210,H=297,M=16;
   const gold=[168,127,62],dark=[28,25,23],gray=[120,113,108],cream=[250,247,241],azul=[30,64,175];
   const green=[22,101,52],orange=[154,52,18],red=[220,38,38];
-
-  const cols=2,rows=3,gapX=6,gapY=6;
+  const cols=2,gapX=6,gapY=6,headerH=22,bannerH=9,footerH=10,padd=5;
   const cardW=(W-2*M-gapX)/cols;
-  const headerH=22,footerH=10;
-  const gridTop=M+headerH;
-  const cardH=(H-gridTop-M-footerH-gapY*(rows-1))/rows;
-  const perPage=cols*rows;
-  const totalPages=Math.ceil(items.length/perPage);
+  const TAM_LBL={'1P':'1 Plaza','1.5P':'1.5 Plazas','2P':'2 Plazas','King':'King','SuperKing':'Super King'};
 
-  function drawHeader(pageNum){
+  // Colchones necesitan más alto (3 variantes de precio): 2 por fila. El resto: 3 por fila.
+  const pagePlan=[];
+  categorias.forEach(cat=>{
+    const rows=cat==='Colchón'?2:3;
+    const perPage=cols*rows;
+    const arr=grupos[cat];
+    for(let i=0;i<arr.length;i+=perPage)pagePlan.push({cat,items:arr.slice(i,i+perPage),rows});
+  });
+  const totalPages=pagePlan.length;
+
+  function drawHeader(pageNum,cat,catCount){
     let y=M;
     doc.setDrawColor(...gold);doc.setLineWidth(0.7);doc.line(M,y,W-M,y);y+=7;
     doc.setFont('helvetica','bold');doc.setFontSize(19);doc.setTextColor(...gold);
@@ -7599,8 +7707,15 @@ function generarCatalogoPDF(){
     doc.setDrawColor(230,229,228);doc.setLineWidth(0.3);doc.line(M,y,W-M,y);
     y+=4.5;
     doc.setFontSize(7.5);doc.setTextColor(...gray);doc.setFont('helvetica','normal');
-    doc.text(today().split('-').reverse().join('/')+'  ·  '+items.length+' producto'+(items.length===1?'':'s'),M,y);
+    doc.text(today().split('-').reverse().join('/'),M,y);
     doc.text('Página '+pageNum+' de '+totalPages,W-M,y,{align:'right'});
+    y+=3.5;
+    doc.setFillColor(...gold);
+    doc.roundedRect(M,y,W-2*M,bannerH,1.5,1.5,'F');
+    doc.setFont('helvetica','bold');doc.setFontSize(9.5);doc.setTextColor(255,255,255);
+    doc.text(cat.toUpperCase(),M+3.5,y+bannerH/2+1.2);
+    doc.setFont('helvetica','normal');doc.setFontSize(8);
+    doc.text(catCount+' producto'+(catCount===1?'':'s'),W-M-3.5,y+bannerH/2+1.2,{align:'right'});
   }
   function drawFooter(){
     const y=H-9;
@@ -7617,27 +7732,20 @@ function generarCatalogoPDF(){
     }catch(e){}
   }
   const fmtNum=n=>'$'+Math.round(n||0).toLocaleString('es-CL');
+  function stockBadge(p,x,y,align){
+    const stock=parseInt(p.stock)||0,minStock=parseInt(p.minStock)||2;
+    const color=stock<=minStock?orange:green;
+    doc.setFontSize(7);doc.setFont('helvetica','bold');doc.setTextColor(...color);
+    doc.text(stock+' u.',x,y,{align});
+  }
 
-  items.forEach((p,i)=>{
-    const idxInPage=i%perPage;
-    if(idxInPage===0){
-      if(i>0)doc.addPage();
-      drawHeader(Math.floor(i/perPage)+1);
-      drawFooter();
-    }
-    const col=idxInPage%cols,row=Math.floor(idxInPage/cols);
-    const x=M+col*(cardW+gapX);
-    const y=gridTop+row*(cardH+gapY);
-    const padd=4;
-
-    // Tarjeta suave
+  function drawCard(p,x,y,cardW,cardH){
     doc.setFillColor(...cream);
     doc.setDrawColor(231,229,228);
     doc.setLineWidth(0.25);
     doc.roundedRect(x,y,cardW,cardH,2.5,2.5,'FD');
 
-    // Foto
-    const photoH=cardH*0.52;
+    const photoH=cardH*0.42;
     doc.setFillColor(255,255,255);
     doc.roundedRect(x+padd,y+padd,cardW-2*padd,photoH,2,2,'F');
     if(p.foto){
@@ -7654,31 +7762,88 @@ function generarCatalogoPDF(){
     ty+=nomLines.length*4.2+1.5;
 
     doc.setFont('helvetica','normal');doc.setFontSize(7.5);doc.setTextColor(...gray);
-    doc.text([p.marca,p.cat].filter(Boolean).join('  ·  '),x+padd,ty);
-    ty+=5.5;
+    doc.text(p.marca||'',x+padd,ty);
+    stockBadge(p,x+cardW-padd,ty,'right');
+    return ty+5.5;
+  }
 
-    doc.setFontSize(8);
-    doc.setFont('helvetica','normal');doc.setTextColor(...gray);
-    doc.text('Mayorista',x+padd,ty);
-    doc.setFont('helvetica','bold');doc.setTextColor(...gold);
-    doc.text(fmtNum(p.may),x+padd+22,ty);
+  pagePlan.forEach((pg,pageIdx)=>{
+    if(pageIdx>0)doc.addPage();
+    drawHeader(pageIdx+1,pg.cat,grupos[pg.cat].length);
+    drawFooter();
+    const rows=pg.rows;
+    const gridTop=M+headerH+bannerH+8;
+    const cardH=(H-gridTop-M-footerH-gapY*(rows-1))/rows;
 
-    const stock=parseInt(p.stock)||0;
-    const minStock=parseInt(p.minStock)||2;
-    const stockColor=stock<=0?red:stock<=minStock?orange:green;
-    const stockTxt=stock<=0?'Sin stock':stock+' u.';
-    doc.setFontSize(7);doc.setFont('helvetica','bold');doc.setTextColor(...stockColor);
-    doc.text(stockTxt,x+cardW-padd,ty,{align:'right'});
-    ty+=4.3;
+    pg.items.forEach((p,idx)=>{
+      const col=idx%cols,row=Math.floor(idx/cols);
+      const x=M+col*(cardW+gapX);
+      const y=gridTop+row*(cardH+gapY);
 
-    doc.setFontSize(8);
-    doc.setFont('helvetica','normal');doc.setTextColor(...gray);
-    doc.text('Minorista',x+padd,ty);
-    doc.setFont('helvetica','bold');doc.setTextColor(...azul);
-    doc.text(fmtNum(p.min),x+padd+22,ty);
+      if(pg.cat==='Colchón'&&!esComboArmadoManual(p)){
+        let ty=drawCard(p,x,y,cardW,cardH);
+        const tam=detectarTamano(p.nombre);
+        doc.setFontSize(7);doc.setTextColor(...gray);
+        doc.text(TAM_LBL[tam]||tam,x+padd,ty);
+        ty+=5;
+        [['solo','Solo colchón'],['base','+ Base'],['baseresp','+ Base y Respaldo']].forEach(([armado,label])=>{
+          const r=precioArmadoColchon(p,armado,'may'),rMin=precioArmadoColchon(p,armado,'min');
+          if(!r||!rMin)return;
+          doc.setFont('helvetica','bold');doc.setFontSize(7.5);doc.setTextColor(...dark);
+          doc.text(label+(r.estimado?' (desde)':''),x+padd,ty);
+          ty+=3.8;
+          doc.setFont('helvetica','normal');doc.setFontSize(7.5);doc.setTextColor(...gray);
+          doc.text('May',x+padd,ty);
+          doc.setFont('helvetica','bold');doc.setTextColor(...gold);
+          doc.text(fmtNum(r.precio),x+padd+7,ty);
+          doc.setFont('helvetica','normal');doc.setTextColor(...gray);
+          doc.text('Min',x+padd+34,ty);
+          doc.setFont('helvetica','bold');doc.setTextColor(...azul);
+          doc.text(fmtNum(rMin.precio),x+padd+41,ty);
+          ty+=4.6;
+        });
+      }else{
+        let ty=drawCard(p,x,y,cardW,cardH);
+        doc.setFontSize(8);
+        doc.setFont('helvetica','normal');doc.setTextColor(...gray);
+        doc.text('Mayorista',x+padd,ty);
+        doc.setFont('helvetica','bold');doc.setTextColor(...gold);
+        doc.text(fmtNum(p.may),x+padd+22,ty);
+        ty+=4.3;
+        doc.setFont('helvetica','normal');doc.setFontSize(8);doc.setTextColor(...gray);
+        doc.text('Minorista',x+padd,ty);
+        doc.setFont('helvetica','bold');doc.setTextColor(...azul);
+        doc.text(fmtNum(p.min),x+padd+22,ty);
+      }
+    });
   });
 
+  return doc;
+}
+
+function generarCatalogoPDF(){
+  const doc=construirCatalogoPDF();
+  if(!doc)return;
   doc.save('catalogo_dreamrest_'+today()+'.pdf');
+}
+
+async function compartirCatalogoWhatsApp(){
+  const doc=construirCatalogoPDF();
+  if(!doc)return;
+  const filename='catalogo_dreamrest_'+today()+'.pdf';
+  const file=new File([doc.output('blob')],filename,{type:'application/pdf'});
+  if(navigator.canShare&&navigator.canShare({files:[file]})){
+    try{
+      await navigator.share({files:[file],title:'Catálogo Dream Rest',text:'Catálogo de productos Dream Rest'});
+      return;
+    }catch(e){
+      if(e&&e.name==='AbortError')return; // el usuario cerró el panel de compartir sin elegir nada
+    }
+  }
+  // Sin soporte para compartir archivos (ej. computador de escritorio): descarga el PDF
+  // y abre WhatsApp con un mensaje, para que lo adjuntes a mano.
+  doc.save(filename);
+  window.open('https://wa.me/?text='+encodeURIComponent('Catálogo de productos Dream Rest — adjunta el PDF que se acaba de descargar 📎'),'_blank');
 }
 
 function exportVentas(){
@@ -7743,7 +7908,7 @@ Object.assign(window,{
   abrirEmpleado,eliminarEmpleado,registrarEventoRRHH,eliminarEventoRRHH,
   renderCalculadora,updInsumoCalc,aplicarCostosInventario,guardarConfigCalculadora,restaurarInsumosDefault,
   handleFotoCompra,calcSugerenciaCompra,verFotoCompra,
-  handleFotoProd,quitarFotoProd,generarCatalogoPDF,
+  handleFotoProd,quitarFotoProd,generarCatalogoPDF,compartirCatalogoWhatsApp,toggleCamposColchon,
   abrirReposicion,renderReposicion,copiarListaReposicion,exportReposicion,
   imprimirVenta,descargarPedidoHTML,
   autocompleteCliente,selCliente,solicitarNotificaciones,
