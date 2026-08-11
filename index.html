@@ -763,7 +763,25 @@ tbody tr:hover{background:var(--gold-bg)}
     <div class="field"><label>Nombre</label><input type="text" id="p-nombre"></div>
     <div class="field">
       <label>Foto del producto (opcional)</label>
-      <input type="file" accept="image/*" capture="environment" id="p-foto-input" onchange="handleFotoProd(this)">
+      <!-- Dos inputs: uno abre la cámara (capture) y otro la galería o el explorador -->
+      <input type="file" accept="image/*" capture="environment" id="p-foto-camara" onchange="handleFotoProd(this)" style="display:none">
+      <input type="file" accept="image/*" id="p-foto-input" onchange="handleFotoProd(this)" style="display:none">
+      <div id="p-foto-zona" tabindex="0"
+        style="border:2px dashed var(--border2);border-radius:10px;padding:14px;text-align:center;cursor:pointer;transition:border-color .15s,background .15s"
+        onclick="document.getElementById('p-foto-input').click()"
+        ondragover="event.preventDefault();this.style.borderColor='#a87f3e';this.style.background='var(--gold-bg)'"
+        ondragleave="this.style.borderColor='';this.style.background=''"
+        ondrop="soltarFotoProd(event,this)">
+        <div style="font-size:22px;line-height:1">🖼️</div>
+        <div style="font-size:12px;margin-top:4px">Toca para elegir una foto</div>
+        <div class="muted" style="font-size:11px;margin-top:2px">o arrástrala aquí, o pega con <strong>Ctrl+V</strong></div>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+        <button type="button" class="btn btn-sec btn-sm" style="flex:1" onclick="document.getElementById('p-foto-camara').click()">📷 Cámara</button>
+        <button type="button" class="btn btn-sec btn-sm" style="flex:1" onclick="document.getElementById('p-foto-input').click()">🖼️ Galería</button>
+        <button type="button" class="btn btn-sec btn-sm" style="flex:1" onclick="pegarFotoProd()">📋 Pegar</button>
+      </div>
+      <div id="p-foto-estado" class="muted" style="font-size:11px;margin-top:6px"></div>
       <div id="p-foto-preview" style="margin-top:8px"></div>
     </div>
     <div class="row">
@@ -1857,9 +1875,22 @@ function renderInicio(){
 }
 
 // =========== NUEVA VENTA TAB ===========
+// El formulario de Nueva Venta es también el de editar y el de cotizar: así los tres
+// muestran siempre todas las opciones (armado de colchón, promos, descuento, cupón, mixto)
+// en vez de tener tres formularios que se van separando con el tiempo.
+function modoNV(){return (window._nvModo&&window._nvModo.tipo)||'venta';}
+function idEdicionNV(){return (window._nvModo&&window._nvModo.id)||null;}
+function salirModoNV(){
+  window._nvModo=null;
+  window._nvItems=[];
+  renderNuevaVentaTab();
+}
+
 function renderNuevaVentaTab(){
-  // Chips de ventas pausadas
-  const pausadas=getVentasPausadas();
+  const modo=modoNV();
+  const editando=modo==='edicion',cotizando=modo==='cotizacion';
+  // Las ventas en pausa son solo del flujo de venta nueva
+  const pausadas=(editando||cotizando)?[]:getVentasPausadas();
   let chipsHtml='';
   if(pausadas.length){
     chipsHtml=`<div style="margin-bottom:12px">
@@ -1875,8 +1906,15 @@ function renderNuevaVentaTab(){
 
   let ultimoVendedor='';try{ultimoVendedor=localStorage.getItem('dr_ultimo_vendedor')||'';}catch(e){}
 
+  const titulo=editando?'Editar venta':cotizando?'Nueva cotización':'Nueva Venta';
+  const avisoModo=(editando||cotizando)?`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;background:${editando?'#fef3c7':'#eff6ff'};border:1px solid ${editando?'#d97706':'#3b82f6'};border-radius:10px;padding:10px 12px;margin-bottom:12px">
+      <span style="font-size:12px;color:${editando?'#92400e':'#1e40af'}">${editando?'✏️ Estás editando una venta ya guardada. El stock se ajusta a la diferencia.':'📄 Estás creando una cotización. No descuenta stock.'}</span>
+      <button class="btn btn-sec btn-sm" onclick="salirModoNV()">Cancelar</button>
+    </div>`:'';
+
   document.getElementById('nv-content').innerHTML=`
-    <div class="section-title">Nueva Venta</div>
+    <div class="section-title">${titulo}</div>
+    ${avisoModo}
     ${chipsHtml}
     <div class="row">
       <div class="field"><label>Tipo de venta</label><select id="nv-tipo" onchange="updTipoVentaNV();renderItemsNV()">
@@ -1989,6 +2027,10 @@ function renderNuevaVentaTab(){
       </div>
     </div>
 
+    <div class="row">
+      <div class="field"><label>Garantía (meses) <span style="text-transform:none;font-weight:400">— opcional</span></label><input type="number" id="nv-garantia" placeholder="Ej: 36" min="0"></div>
+      <div class="field"><label>Dirección (opcional)</label><input type="text" id="nv-dir"></div>
+    </div>
     <div class="field"><label>Notas</label><textarea id="nv-notas" rows="2"></textarea></div>
 
     <div style="height:90px"></div>
@@ -2000,13 +2042,50 @@ function renderNuevaVentaTab(){
           <div style="font-size:10px;opacity:.85"><span id="nv-bar-items">0 productos</span><span id="nv-bar-desc"></span></div>
           <div style="font-size:22px;font-weight:700" id="nv-bar-total">$0</div>
         </div>
-        <button onclick="pausarVentaNV()" style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.4);padding:10px 14px;border-radius:8px;cursor:pointer;font-size:13px">⏸️</button>
-        <button onclick="saveVentaNV()" style="background:#fff;color:#a87f3e;border:none;padding:12px 22px;border-radius:8px;cursor:pointer;font-size:14px;font-weight:700">💾 Guardar</button>
+        ${(editando||cotizando)?'':`<button onclick="pausarVentaNV()" style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.4);padding:10px 14px;border-radius:8px;cursor:pointer;font-size:13px">⏸️</button>`}
+        <button onclick="saveVentaNV()" style="background:#fff;color:#a87f3e;border:none;padding:12px 22px;border-radius:8px;cursor:pointer;font-size:14px;font-weight:700">💾 ${editando?'Guardar cambios':cotizando?'Guardar cotización':'Guardar'}</button>
       </div>
     </div>`;
   window._nvItems=window._nvItems&&window._nvRestaurando?window._nvItems:[{prodId:null,desc:'',qty:1,precio:0,armado:'solo',respaldoId:null}];
   window._nvRestaurando=false;
   renderItemsNV();
+}
+
+// Carga una venta o cotización existente en el formulario completo y abre la pestaña.
+function abrirEnFormularioNV(doc,modo,id){
+  window._nvModo={tipo:modo,id:id||null};
+  window._nvItems=(doc.items||[]).map(it=>({...it}));
+  window._nvRestaurando=true;
+  setTab('nueva-venta');
+  const s=(el,val)=>{const e=document.getElementById(el);if(e&&val!=null)e.value=val;};
+  s('nv-tipo',doc.tipo||'min');
+  llenarSelectVendedores('nv-vendedor',doc.vendedor||'Isaías');
+  s('nv-cliente',doc.cliente==='Cliente mostrador'?'':doc.cliente||'');
+  s('nv-rut',doc.rut||'');s('nv-empresa',doc.empresa||'');s('nv-tel',doc.tel||'');
+  s('nv-fecha',doc.fecha||today());
+  s('nv-fecha-desp',doc.fechaDesp||doc.fecha||today());
+  s('nv-pago',doc.pago||'Efectivo');
+  s('nv-estado',doc.estado||'pendiente');
+  s('nv-desp',doc.desp||0);
+  s('nv-calle',doc.despCalle||'');s('nv-numero',doc.despNumero||'');
+  s('nv-comuna',doc.despComuna||'');s('nv-hora',doc.despHora||'Sin preferencia');
+  s('nv-cancelado',doc.cancelado||0);
+  s('nv-garantia',doc.garantiaMeses||'');
+  s('nv-dir',doc.dir||'');
+  s('nv-notas',doc.notas||'');
+  // El descuento se guarda ya calculado en pesos, así que se recarga como monto fijo.
+  if((parseInt(doc.descuento)||0)>0){s('nv-desc-tipo','$');s('nv-desc-valor',parseInt(doc.descuento)||0);}
+  if(doc.cupon&&doc.cupon.codigo)s('nv-cupon',doc.cupon.codigo);
+  if(doc.pagoDesglose){
+    const d=doc.pagoDesglose;
+    s('nv-mix-efectivo',d.efectivo||0);s('nv-mix-tarjeta',d.tarjeta||0);
+    s('nv-mix-transferencia',d.transferencia||0);s('nv-mix-debito',d.debito||0);
+    s('nv-mix-credito',d.credito||0);
+  }
+  updTipoVentaNV();toggleDespNV();updPagoNV();
+  renderItemsNV();
+  recalcTotalNV();
+  window.scrollTo(0,0);
 }
 
 // =========== VENTAS EN PAUSA ===========
@@ -2166,10 +2245,13 @@ function renderItemsNV(){
     const armado=it.armado||'solo';
 
     html+=`<div style="background:#f9f6f0;border-radius:8px;padding:8px;margin-bottom:8px;position:relative">
-      <div style="position:relative;margin-bottom:6px">
-        <input type="text" id="nv-prod-input-${i}" value="${(nombreActual).replace(/"/g,'&quot;')}" placeholder="Escribe el producto..." autocomplete="off"
-          oninput="autocompleteProductoNV(${i})" style="width:100%">
-        <div id="nv-prod-ac-${i}" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--white);border:1px solid var(--border);color:var(--text);border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.12);z-index:50;max-height:180px;overflow-y:auto;margin-top:2px"></div>
+      <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px">
+        ${prod?`<div onclick="verFotoProdVenta('${prod.id}')" style="cursor:${prod.foto?'zoom-in':'default'}">${miniFotoProd(prod,44)}</div>`:''}
+        <div style="position:relative;flex:1;min-width:0">
+          <input type="text" id="nv-prod-input-${i}" value="${(nombreActual).replace(/"/g,'&quot;')}" placeholder="Escribe el producto..." autocomplete="off"
+            oninput="autocompleteProductoNV(${i})" style="width:100%">
+          <div id="nv-prod-ac-${i}" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--white);border:1px solid var(--border);color:var(--text);border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.12);z-index:50;max-height:180px;overflow-y:auto;margin-top:2px"></div>
+        </div>
       </div>`;
 
     // Si es colchón, mostrar opciones de armado
@@ -2280,6 +2362,23 @@ function recalcularPrecioItemNV(i){
   it.desc=desc;
 }
 
+// Miniatura del producto para los buscadores y las líneas de venta.
+// Sin foto cae a un ícono, para que la fila no se descuadre.
+// Abre la foto en grande para mostrársela al cliente durante la venta.
+function verFotoProdVenta(id){
+  const p=inventario.find(x=>String(x.id)===String(id));
+  if(!p||!p.foto)return;
+  const w=window.open('','_blank');
+  if(!w)return;
+  w.document.write('<html><head><title>'+escHtml(p.nombre)+'</title></head><body style="margin:0;background:#111;display:flex;align-items:center;justify-content:center;min-height:100vh"><img src="'+p.foto+'" style="max-width:100%;max-height:100vh"></body></html>');
+  w.document.close();
+}
+function miniFotoProd(p,size){
+  const s=size||34;
+  if(p&&p.foto)return `<img src="${p.foto}" alt="" style="width:${s}px;height:${s}px;object-fit:cover;border-radius:6px;flex-shrink:0;border:1px solid var(--border)">`;
+  return `<div style="width:${s}px;height:${s}px;background:var(--gold-bg);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:${Math.round(s*0.45)}px;flex-shrink:0;color:var(--gold)">🛏️</div>`;
+}
+
 function autocompleteProductoNV(i){
   const input=document.getElementById('nv-prod-input-'+i);
   const ac=document.getElementById('nv-prod-ac-'+i);
@@ -2298,9 +2397,12 @@ function autocompleteProductoNV(i){
     const precioHtml=pc.promo
       ?`<span style="white-space:nowrap"><span style="text-decoration:line-through;color:#a8a29e;font-size:10px">${fmt(pc.normal)}</span> <strong style="color:#166534">${fmt(pc.precio)}</strong></span>`
       :`<span style="color:#a87f3e;white-space:nowrap">${fmt(pc.precio)}</span>`;
-    return`<div onclick="selProdAutoNV(${i},'${p.id}',event)" style="padding:9px 11px;cursor:pointer;border-bottom:1px solid var(--border);font-size:12px;transition:background .15s" onmouseover="this.style.background='var(--gold-bg)'" onmouseout="this.style.background=''">
-      <div style="display:flex;justify-content:space-between;gap:8px"><span><strong>${p.nombre}</strong>${pc.promo?' <span class="tag" style="background:#dcfce7;color:#166534">PROMO</span>':''}</span>${precioHtml}</div>
-      <div style="color:#78716c;font-size:10px;margin-top:1px">${p.marca||''} ${stockTxt?'· '+stockTxt:''}</div>
+    return`<div onclick="selProdAutoNV(${i},'${p.id}',event)" style="padding:9px 11px;cursor:pointer;border-bottom:1px solid var(--border);font-size:12px;transition:background .15s;display:flex;gap:9px;align-items:center" onmouseover="this.style.background='var(--gold-bg)'" onmouseout="this.style.background=''">
+      ${miniFotoProd(p)}
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;justify-content:space-between;gap:8px"><span><strong>${p.nombre}</strong>${pc.promo?' <span class="tag" style="background:#dcfce7;color:#166534">PROMO</span>':''}</span>${precioHtml}</div>
+        <div style="color:#78716c;font-size:10px;margin-top:1px">${p.marca||''} ${stockTxt?'· '+stockTxt:''}</div>
+      </div>
     </div>`;
   }).join('');
   ac.style.display='block';
@@ -2391,7 +2493,13 @@ function recalcTotalNV(){
   if(barT)barT.textContent=fmt(total);
 }
 async function saveVentaNV(){
+  const modo=modoNV(),editId=idEdicionNV();
+  const editando=modo==='edicion',cotizando=modo==='cotizacion';
+  const orig=editando?ventas.find(x=>String(x.id)===String(editId)):null;
+  if(editando&&!orig){toast('No se encontró la venta que estabas editando.');salirModoNV();return;}
+
   let cliente=document.getElementById('nv-cliente').value.trim();
+  if(cotizando&&!cliente){alert('Falta el nombre del cliente para la cotización');return;}
   if(!cliente)cliente='Cliente mostrador';
   const items=(window._nvItems||[]).filter(it=>it.prodId||String(it.desc||'').trim()).map(it=>({...it}));
   if(!items.length){alert('Agrega al menos un producto');return;}
@@ -2399,13 +2507,22 @@ async function saveVentaNV(){
   const desc=calcDescuentoNV(sub);
   const descPromos=descuentoPromosNV();
   // Cupón de descuento: revalidar al guardar (pudo vencer o usarse desde otro equipo)
-  let cuponAplicado=null,descCupon=0;
-  const codeCupon=(document.getElementById('nv-cupon')||{value:''}).value.trim();
+  let cuponAplicado=null,descCupon=0,cuponYaAplicado=null;
+  const codeCupon=(document.getElementById('nv-cupon')||{value:''}).value.trim().toUpperCase();
   if(codeCupon){
-    const r=validarCupon(codeCupon,sub);
-    if(!r.ok){
-      if(!(await confirmDialog('⚠️ '+r.msg+'\n\n¿Guardar la venta SIN el cupón?')))return;
-    }else{cuponAplicado=r.cupon;descCupon=r.desc;}
+    // Al editar, el cupón que ya traía la venta figura como usado: se recalcula sin
+    // volver a marcarlo ni rechazarlo por estar usado.
+    const eraElMismo=orig&&orig.cupon&&String(orig.cupon.codigo).toUpperCase()===codeCupon;
+    if(eraElMismo){
+      const c=cupones.find(x=>String(x.id)===String(orig.cupon.id))||null;
+      descCupon=c?Math.min(c.tipoDesc==='%'?Math.round(sub*c.valor/100):Math.round(c.valor),sub):(parseInt(orig.descuentoCupon)||0);
+      cuponYaAplicado=orig.cupon;
+    }else{
+      const r=validarCupon(codeCupon,sub);
+      if(!r.ok){
+        if(!(await confirmDialog('⚠️ '+r.msg+'\n\n¿Guardar SIN el cupón?')))return;
+      }else{cuponAplicado=r.cupon;descCupon=r.desc;}
+    }
   }
   const totalFinal=Math.max(0,sub-desc-descCupon);
   const cancelado=parseInt(document.getElementById('nv-cancelado').value)||0;
@@ -2415,9 +2532,10 @@ async function saveVentaNV(){
     const g=id=>parseInt(document.getElementById(id).value)||0;
     pagoDesglose={efectivo:g('nv-mix-efectivo'),tarjeta:g('nv-mix-tarjeta'),transferencia:g('nv-mix-transferencia'),debito:g('nv-mix-debito'),credito:g('nv-mix-credito')};
   }
+  const gTxt=id=>{const e=document.getElementById(id);return e?e.value.trim():'';};
   const v={
-    id:uid(),
-    horaCreacion:horaActual(),
+    id:editando?orig.id:uid(),
+    horaCreacion:editando?orig.horaCreacion:horaActual(),
     fecha:document.getElementById('nv-fecha').value||today(),
     fechaDesp:document.getElementById('nv-fecha-desp').value||today(),
     estado:document.getElementById('nv-estado').value||'pendiente',
@@ -2435,29 +2553,73 @@ async function saveVentaNV(){
     despComuna:document.getElementById('nv-comuna').value.trim(),
     despHora:document.getElementById('nv-hora').value,
     cancelado,
+    dir:gTxt('nv-dir'),
+    garantiaMeses:parseInt((document.getElementById('nv-garantia')||{}).value)||0,
     notas:document.getElementById('nv-notas').value.trim(),
     items,subtotal:sub,descuento:desc,descuentoPromos:descPromos,
-    descuentoCupon:descCupon,cupon:cuponAplicado?{id:cuponAplicado.id,codigo:cuponAplicado.codigo}:null,
+    descuentoCupon:descCupon,
+    cupon:cuponAplicado?{id:cuponAplicado.id,codigo:cuponAplicado.codigo}:(cuponYaAplicado||null),
     total:totalFinal,saldo:Math.max(0,totalFinal-cancelado)
   };
+
+  // ---- COTIZACIÓN: no toca stock, no da puntos, no genera cupones ----
+  if(cotizando){
+    const previa=editId?cotizaciones.find(x=>String(x.id)===String(editId)):null;
+    const c={...v,id:editId||v.id,convertida:previa?!!previa.convertida:false};
+    delete c.horaCreacion;
+    const i=editId?cotizaciones.findIndex(x=>String(x.id)===String(editId)):-1;
+    if(i>=0)cotizaciones[i]=c;else cotizaciones.push(c);
+    try{await saveCotDB(c);}catch(e){toast('⚠️ Error al guardar: '+e.message);}
+    salirModoNV();
+    toast(editId?'✅ Cotización actualizada':'✅ Cotización guardada');
+    setTab('cotizaciones');
+    return;
+  }
+
   // Todas las escrituras (stock + productos nuevos + venta) en UN solo batch atómico = 1 viaje de red
   const batch=writeBatch(db);
-  descontarStockItems(v.items,batch);              // descuenta stock (con combos) -> al batch
+  if(editando){
+    // Conservar lo que el formulario no edita
+    if(Array.isArray(orig.abonos)&&orig.abonos.length)v.abonos=orig.abonos;
+    if(orig.cuponSorpresa)v.cuponSorpresa=orig.cuponSorpresa;
+    // Stock: devolver lo de antes y descontar lo nuevo (salvo venta cancelada ya devuelta)
+    if(orig.stockDevuelto){v.stockDevuelto=true;}
+    else{
+      restaurarStockItems(orig.items||[],batch);
+      descontarStockItems(v.items,batch);
+    }
+  }else{
+    descontarStockItems(v.items,batch);              // descuenta stock (con combos) -> al batch
+  }
   await agregarProductosManuales(v.items,v.tipo,batch); // crea productos manuales -> al batch
   // Marcar el cupón como usado (fecha + venta) en el mismo batch
   if(cuponAplicado){
     cuponAplicado.usado=true;cuponAplicado.usadoFecha=today();cuponAplicado.usadoVentaId=v.id;
     batch.set(doc(db,'cupones',String(cuponAplicado.id)),cuponAplicado);
   }
-  // Cupón sorpresa (Sistema 2): si está activo y la venta supera el monto gatillante
-  if(cuponesConfig.activo&&(parseInt(cuponesConfig.monto)||0)>0&&totalFinal>=(parseInt(cuponesConfig.monto)||0)){
-    const cs=generarCuponSorpresa(v,batch);
-    v.cuponSorpresa={codigo:cs.codigo,tipoDesc:cs.tipoDesc,valor:cs.valor,vence:cs.vence};
+  // Cupón sorpresa y puntos: solo en ventas nuevas, para no duplicarlos al editar
+  if(!editando){
+    if(cuponesConfig.activo&&(parseInt(cuponesConfig.monto)||0)>0&&totalFinal>=(parseInt(cuponesConfig.monto)||0)){
+      const cs=generarCuponSorpresa(v,batch);
+      v.cuponSorpresa={codigo:cs.codigo,tipoDesc:cs.tipoDesc,valor:cs.valor,vence:cs.vence};
+    }
+    otorgarPuntos(v,batch);
   }
-  otorgarPuntos(v,batch);
   batch.set(doc(db,'ventas',String(v.id)),v);
-  ventas.push(v);
+  if(editando){
+    const i=ventas.findIndex(x=>String(x.id)===String(v.id));
+    if(i>=0)ventas[i]=v;else ventas.push(v);
+  }else{
+    ventas.push(v);
+  }
   // UI optimista: refresca de inmediato; el guardado sincroniza en 2do plano (offline-first)
+  if(editando){
+    salirModoNV();
+    batch.commit().catch(e=>toast('⚠️ Error al sincronizar la venta: '+e.message));
+    toast('✅ Cambios guardados');
+    setTab('ventas');
+    return;
+  }
   renderNuevaVentaTab();
   batch.commit().catch(e=>toast('⚠️ Error al sincronizar la venta: '+e.message));
   // Impresión: en PC se abre automáticamente; en celular queda un botón para no congelar Safari iOS
@@ -2769,17 +2931,14 @@ function renderCotizaciones(){
   document.getElementById('cot-content').innerHTML=html;
 }
 
+// Cotizar usa el mismo formulario completo que Nueva Venta.
 function nuevaCotizacion(){
-  window._editCotId=null;
-  window._cotItems=[];
-  abrirModalCot();
+  abrirEnFormularioNV({items:[{prodId:null,desc:'',qty:1,precio:0,armado:'solo',respaldoId:null}]},'cotizacion');
 }
 function editarCotizacion(id){
   const c=cotizaciones.find(x=>String(x.id)===String(id));
   if(!c)return;
-  window._editCotId=id;
-  window._cotItems=c.items.map(it=>({...it}));
-  abrirModalCot(c);
+  abrirEnFormularioNV(c,'cotizacion',id);
 }
 function abrirModalCot(c){
   c=c||{};
@@ -4519,24 +4678,74 @@ function handleFotoCompra(input){
   };
   reader.readAsDataURL(file);
 }
-function handleFotoProd(input){
-  const file=input.files[0];
-  if(!file)return;
+function estadoFotoProd(txt,color){
+  const el=document.getElementById('p-foto-estado');
+  if(el){el.textContent=txt||'';el.style.color=color||'';}
+}
+// Punto único de entrada: cámara, galería, arrastrar y pegar terminan todos aquí.
+function cargarArchivoFotoProd(file){
+  if(!file){estadoFotoProd('No llegó ninguna imagen.','#dc2626');return;}
+  if(!/^image\//.test(file.type)){estadoFotoProd('Ese archivo no es una imagen.','#dc2626');return;}
+  estadoFotoProd('Procesando foto…');
   const reader=new FileReader();
-  reader.onerror=()=>alert('No se pudo leer la foto. Intenta con otra.');
+  reader.onerror=()=>estadoFotoProd('No se pudo leer la foto. Intenta con otra.','#dc2626');
   reader.onload=e=>{
     const img=new Image();
-    img.onerror=()=>alert('No se pudo procesar esa foto. Intenta con otra.');
+    img.onerror=()=>estadoFotoProd('No se pudo procesar esa foto. Intenta con otra.','#dc2626');
     img.onload=()=>{
       const dataUrl=comprimirImagen(img,500,600000);
-      if(!dataUrl){alert('La foto es demasiado pesada incluso comprimida al máximo. Prueba con otra o recórtala antes de subirla.');return;}
+      if(!dataUrl){estadoFotoProd('La foto pesa demasiado incluso comprimida. Recórtala e inténtalo de nuevo.','#dc2626');return;}
       window._prodFotoData=dataUrl;
+      estadoFotoProd('✅ Foto lista','#166534');
       renderFotoProdPreview();
     };
     img.src=e.target.result;
   };
   reader.readAsDataURL(file);
 }
+function handleFotoProd(input){
+  cargarArchivoFotoProd(input.files&&input.files[0]);
+}
+function soltarFotoProd(ev,zona){
+  ev.preventDefault();
+  if(zona){zona.style.borderColor='';zona.style.background='';}
+  const f=ev.dataTransfer&&ev.dataTransfer.files&&ev.dataTransfer.files[0];
+  cargarArchivoFotoProd(f);
+}
+// Pegar con el botón: usa el portapapeles del sistema (pide permiso la primera vez).
+async function pegarFotoProd(){
+  if(!navigator.clipboard||!navigator.clipboard.read){
+    estadoFotoProd('Este navegador no permite pegar desde el botón. Usa Ctrl+V con el formulario abierto.','#a87f3e');
+    return;
+  }
+  try{
+    const items=await navigator.clipboard.read();
+    for(const it of items){
+      const tipo=it.types.find(t=>t.startsWith('image/'));
+      if(tipo){
+        const blob=await it.getType(tipo);
+        cargarArchivoFotoProd(new File([blob],'pegada.png',{type:tipo}));
+        return;
+      }
+    }
+    estadoFotoProd('No hay ninguna imagen copiada en el portapapeles.','#a87f3e');
+  }catch(e){
+    estadoFotoProd('No se pudo leer el portapapeles. Prueba con Ctrl+V.','#a87f3e');
+  }
+}
+// Ctrl+V en cualquier parte mientras el formulario de producto está abierto.
+document.addEventListener('paste',ev=>{
+  const modal=document.getElementById('modal-prod');
+  if(!modal||!modal.classList.contains('show'))return;
+  const items=(ev.clipboardData&&ev.clipboardData.items)||[];
+  for(const it of items){
+    if(it.type&&it.type.startsWith('image/')){
+      ev.preventDefault();
+      cargarArchivoFotoProd(it.getAsFile());
+      return;
+    }
+  }
+});
 function renderFotoProdPreview(){
   const el=document.getElementById('p-foto-preview');
   if(!el)return;
@@ -4546,8 +4755,8 @@ function renderFotoProdPreview(){
 }
 function quitarFotoProd(){
   window._prodFotoData=null;
-  const input=document.getElementById('p-foto-input');
-  if(input)input.value='';
+  ['p-foto-input','p-foto-camara'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  estadoFotoProd('');
   renderFotoProdPreview();
 }
 function calcSugerenciaCompra(){
@@ -6693,7 +6902,8 @@ async function openProd(){
   editProdId=null;
   document.getElementById('prod-title').textContent='Agregar producto';
   document.getElementById('p-nombre').value='';
-  document.getElementById('p-foto-input').value='';
+  ['p-foto-input','p-foto-camara'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  estadoFotoProd('');
   window._prodFotoData=null;
   renderFotoProdPreview();
   document.getElementById('p-marca').value='';
@@ -6721,7 +6931,8 @@ async function editProd(id){
   editProdId=id;
   document.getElementById('prod-title').textContent='Editar producto';
   document.getElementById('p-nombre').value=p.nombre;
-  document.getElementById('p-foto-input').value='';
+  ['p-foto-input','p-foto-camara'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  estadoFotoProd('');
   window._prodFotoData=p.foto||null;
   renderFotoProdPreview();
   document.getElementById('p-marca').value=p.marca||'';
@@ -6864,9 +7075,12 @@ function autocompleteProductoVT(i){
     const precioHtml=pc.promo
       ?`<span style="white-space:nowrap"><span style="text-decoration:line-through;color:#a8a29e;font-size:10px">${fmt(pc.normal)}</span> <strong style="color:#166534">${fmt(pc.precio)}</strong></span>`
       :`<span style="color:#a87f3e;white-space:nowrap">${fmt(pc.precio)}</span>`;
-    return`<div onclick="selProdAutoVT(${i},'${p.id}',event)" style="padding:9px 11px;cursor:pointer;border-bottom:1px solid var(--border);font-size:12px" onmouseover="this.style.background='var(--gold-bg)'" onmouseout="this.style.background=''">
-      <div style="display:flex;justify-content:space-between;gap:8px"><span><strong>${p.nombre}</strong>${pc.promo?' <span class="tag" style="background:#dcfce7;color:#166534">PROMO</span>':''}</span>${precioHtml}</div>
-      <div style="color:#78716c;font-size:10px;margin-top:1px">${p.marca||''} ${stockTxt?'· '+stockTxt:''}</div>
+    return`<div onclick="selProdAutoVT(${i},'${p.id}',event)" style="padding:9px 11px;cursor:pointer;border-bottom:1px solid var(--border);font-size:12px;display:flex;gap:9px;align-items:center" onmouseover="this.style.background='var(--gold-bg)'" onmouseout="this.style.background=''">
+      ${miniFotoProd(p)}
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;justify-content:space-between;gap:8px"><span><strong>${p.nombre}</strong>${pc.promo?' <span class="tag" style="background:#dcfce7;color:#166534">PROMO</span>':''}</span>${precioHtml}</div>
+        <div style="color:#78716c;font-size:10px;margin-top:1px">${p.marca||''} ${stockTxt?'· '+stockTxt:''}</div>
+      </div>
     </div>`;
   }).join('');
   ac.style.display='block';
@@ -6925,7 +7139,13 @@ const ESTADO_CFG={
 };
 function estadoTag(e){const c=ESTADO_CFG[e]||ESTADO_CFG.pendiente;return`<span style="display:inline-block;font-size:10px;padding:2px 7px;border-radius:4px;font-weight:600;background:${c.bg};color:${c.color}">${c.emoji} ${c.label}</span>`}
 
+// El atajo "+" del encabezado también lleva al formulario completo.
 function openVenta(){
+  salirModoNV();
+  setTab('nueva-venta');
+}
+
+function openVentaModalViejo(){
   editVentaId=null;
   llenarSelectVendedores('vt-vendedor','Isaías');
   ventaItems=[];
@@ -7669,8 +7889,16 @@ function descargarPedidoHTML(){
   setTimeout(()=>{document.body.removeChild(a);URL.revokeObjectURL(url);},500);
 }
 
+// Editar usa el mismo formulario completo que Nueva Venta, para no perder
+// armado de colchón, promociones, descuento, cupón ni desglose de pago mixto.
 async function editVenta(id){
   if(!(await requiereAdmin()))return;
+  const v=ventas.find(x=>String(x.id)===String(id));
+  if(!v)return;
+  abrirEnFormularioNV(v,'edicion',id);
+}
+
+async function editVentaModalViejo(id){
   const v=ventas.find(x=>String(x.id)===String(id));
   if(!v)return;
   editVentaId=id;
@@ -8794,6 +9022,7 @@ Object.assign(window,{
   openVenta,saveVenta,editVenta,delVenta,viewVenta,
   addItem,rmItem,selProd,updItem,recalcTotal,updTipoVenta,toggleDespCampos,sincFechaDesp,
   addItemNV,rmItemNV,selProdNV,updItemNV,recalcTotalNV,updTipoVentaNV,toggleDespNV,saveVentaNV,
+  salirModoNV,abrirEnFormularioNV,
   autocompleteProductoNV,selProdAutoNV,autocompleteProductoVT,selProdAutoVT,
   setArmadoNV,setRespaldoNV,
   renderInv,renderVentas,renderDespachos,renderResumen,renderInicio,renderNuevaVentaTab,renderVendedores,
@@ -8818,9 +9047,12 @@ Object.assign(window,{
   renderFinanzas,abrirGastoFijo,eliminarGastoFijo,abrirCompra,guardarCompra,eliminarCompra,
   renderCaja,abrirCaja,cerrarCaja,agregarMovimientoCaja,
   abrirEmpleado,eliminarEmpleado,registrarEventoRRHH,eliminarEventoRRHH,
-  renderCalculadora,updInsumoCalc,aplicarCostosInventario,guardarConfigCalculadora,restaurarInsumosDefault,
+  renderPersonal,faltaRapida,atrasoRapido,toggleActivoEmpleado,
+  renderCalculadora,updInsumoCalc,aplicarCostosInventario,aplicarPreciosSugeridos,guardarConfigCalculadora,restaurarInsumosDefault,
+  updRecetaCalc,restaurarRecetasDefault,eliminarHistorialCalc,setMargen,toggleAutoPrecios,
+  updCrearColchon,crearProductoDesdeCalculadora,updCostearEspuma,
   handleFotoCompra,calcSugerenciaCompra,verFotoCompra,
-  handleFotoProd,quitarFotoProd,generarCatalogoPDF,compartirCatalogoWhatsApp,toggleCamposColchon,
+  handleFotoProd,quitarFotoProd,soltarFotoProd,pegarFotoProd,verFotoProdVenta,generarCatalogoPDF,generarCatalogoPropio,compartirCatalogoWhatsApp,toggleCamposColchon,
   abrirReposicion,renderReposicion,copiarListaReposicion,exportReposicion,
   imprimirVenta,descargarPedidoHTML,
   autocompleteCliente,selCliente,solicitarNotificaciones,
