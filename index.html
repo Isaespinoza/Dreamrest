@@ -4829,6 +4829,26 @@ function verFotoCompra(id){
 }
 
 // =========== MOTOR CALCULADORA (importado) ===========
+// Cómo viene el precio de cada insumo: 'mas' = es neto y hay que sumarle el 19%, 'incl' = ya
+// lo trae adentro. Antes esto estaba fijo en el código (IVA_MODELO), así que si un proveedor
+// cambiaba de facturación había que editar el archivo. Ahora es parte de los insumos y se
+// elige en la pestaña Insumos, al lado del precio al que corresponde.
+const IVA_DEFAULT={
+  espuma:'mas',          // espuma neta
+  resortes:'mas',        // resorte neto
+  tapas:'incl',          // tapas jacquard ya con IVA
+  tapaAcolchadaM:'mas',  // tapa acolchada con espuma, neta
+  telaM:'mas',           // tela acolchada neta
+  tntM:'incl',           // TNT ya con IVA
+  telaRollo:'mas',       // rollo de tela para la faja, neto
+  cintaM:'mas',          // cinta neta
+  pegamento:'mas',       // pegamento neto
+  bolsa:'incl',          // bolsa ya con IVA
+  moArmado:'incl',       // mano de obra: no genera IVA
+  moCostura:'incl',
+  gastoIndirecto:'incl'  // arriendo, luz, transporte: repartidos, sin IVA propio
+};
+
 const INSUMOS_DEFAULT={
   espuma:{
     D12:{m3:60400,cm:1721},
@@ -4874,7 +4894,8 @@ const INSUMOS_DEFAULT={
   // Merma de corte y gastos indirectos. Van en 0 para no alterar los costos ya calculados:
   // ponlos según tu realidad y todos los costos se recalculan solos.
   mermaEspumaPct:0,   // % de espuma que se pierde al cortar (se suma a todo item de espuma)
-  gastoIndirecto:0    // $ fijos por colchón: arriendo, luz, transporte, etc.
+  gastoIndirecto:0,   // $ fijos por colchón: arriendo, luz, transporte, etc.
+  iva:JSON.parse(JSON.stringify(IVA_DEFAULT))
 };
 
 const RECETAS_DEFAULT={
@@ -4897,13 +4918,25 @@ const RECETAS_DEFAULT={
   }
 };
 
+// Valores con los que arranca toda receta canónica (ver la sección "RECETA CANÓNICA" más
+// abajo). Vive acá arriba porque `recetas` se normaliza al cargar el archivo, antes de llegar
+// a esa sección, y un const declarado después todavía no existe en ese momento.
+const RECETA_BASE={base:'espuma',tapaArriba:'acolchada',tnt:0,costuras:2,perfil:'soft',
+  lingotes:0,lingoteD:'D21cortes',cabeceras:0,cabeceraD:'D21cortes'};
+
 // Márgenes objetivo sobre el costo de fabricación. Viven en la config (no en el navegador),
 // así son los mismos en el computador y en el teléfono.
 const MARGENES_DEFAULT={may:30,min:50};
 
 let insumos=JSON.parse(JSON.stringify(INSUMOS_DEFAULT));
-let recetas=JSON.parse(JSON.stringify(RECETAS_DEFAULT));
+// Se normalizan de entrada: de aquí en adelante toda receta viva en memoria tiene "capas",
+// venga de los valores por defecto, de Firestore o de un colchón armado a mano.
+let recetas=normalizarRecetasMapa(JSON.parse(JSON.stringify(RECETAS_DEFAULT)));
 let margenes={...MARGENES_DEFAULT};
+// Modelos creados desde "Crear colchón": {clave:{nombre, receta}}. Van aparte de `recetas`
+// a propósito: si un equipo quedó con una versión vieja de la app cacheada, no los reconoce
+// y simplemente los ignora, en vez de intentar costearlos con el molde antiguo y dar NaN.
+let modelosCustom={};
 // Con esto encendido, cambiar un insumo, una receta o un margen reescribe los precios
 // de venta del inventario sin preguntar. Se activa a mano desde Costos y márgenes.
 let autoPrecios=false;
@@ -4913,10 +4946,43 @@ function aplicarConfigCalculadora(cfg){
   if(cfg.insumos){
     insumos=Object.assign({},INSUMOS_DEFAULT,cfg.insumos);
     insumos.espuma=Object.assign({},INSUMOS_DEFAULT.espuma,cfg.insumos.espuma||{});
+    // Una config guardada antes de que el IVA fuera editable no trae este mapa: se completa
+    // con los criterios de siempre para que los costos no cambien solos.
+    insumos.iva=Object.assign({},IVA_DEFAULT,cfg.insumos.iva||{});
   }
-  if(cfg.recetas)recetas=Object.assign({},JSON.parse(JSON.stringify(RECETAS_DEFAULT)),cfg.recetas);
+  if(cfg.recetas)recetas=normalizarRecetasMapa(Object.assign({},JSON.parse(JSON.stringify(RECETAS_DEFAULT)),cfg.recetas));
+  if(cfg.modelosCustom){
+    modelosCustom=JSON.parse(JSON.stringify(cfg.modelosCustom));
+    Object.keys(modelosCustom).forEach(k=>{modelosCustom[k].receta=normalizarReceta(modelosCustom[k].receta)});
+  }
   if(cfg.margenes)margenes=Object.assign({},MARGENES_DEFAULT,cfg.margenes);
   if(cfg.autoPrecios!=null)autoPrecios=!!cfg.autoPrecios;
+}
+
+// Nombre visible de un modelo, sea de los tres base o creado a medida.
+function nombreModelo(key){
+  if(MODELOS_CALC[key])return MODELOS_CALC[key];
+  if(modelosCustom[key])return modelosCustom[key].nombre;
+  return key;
+}
+// Los tres base más los creados a medida, en un solo mapa {clave:nombre}.
+function modelosCalcTodos(){
+  const out=Object.assign({},MODELOS_CALC);
+  Object.entries(modelosCustom).forEach(([k,m])=>{out[k]=m.nombre});
+  return out;
+}
+function esModeloCustom(key){return !!modelosCustom[key]}
+// Receta de un modelo, mire donde mire.
+function recetaDeModelo(key){
+  if(modelosCustom[key])return modelosCustom[key].receta;
+  return recetas[key]||null;
+}
+// Receta con la que hay que costear un producto del inventario: la suya propia si se creó
+// como colchón suelto, o la de su modelo si salió de uno.
+function recetaDeProducto(calc){
+  if(!calc)return null;
+  if(calc.receta)return normalizarReceta(calc.receta);
+  return normalizarReceta(recetaDeModelo(calc.modelo),calc.modelo);
 }
 
 // ============ HELPERS ============
@@ -4937,6 +5003,29 @@ const TAMANOS=[
 function precioEspumaM3(densKey){
   return (insumos.espuma[densKey]||{}).m3||0;
 }
+
+// La lista del proveedor trae dos columnas: el m³ y el valor de 1 cm. Ese segundo número es
+// el m³ llevado a una lámina de 150×190 (2,85 m² × 1 cm = 0,0285 m³): 60.400 × 0,0285 = 1.721,
+// y así calzan las cinco densidades de la lista. Se deriva en vez de guardarse aparte para que
+// cambiar el m³ no deje el valor por cm apuntando a un precio viejo.
+const LAMINA_LARGO=190,LAMINA_ANCHO=150;
+const M3_POR_CM_LAMINA=LAMINA_ANCHO*LAMINA_LARGO/1000000;
+function precioEspumaCm(densKey){
+  // Multiplicar primero y dividir después: haciéndolo al revés, la D25 daba 3.277,49 y
+  // terminaba mostrando 3.277 en vez de los 3.278 de la lista.
+  return precioEspumaM3(densKey)*LAMINA_ANCHO*LAMINA_LARGO/1000000;
+}
+// Si un insumo se cobra neto (+IVA) o con el IVA ya adentro. Todo el costeo pasa por acá.
+function ivaDe(k){
+  const v=(insumos.iva||{})[k];
+  return v==='mas'||v==='incl'?v:(IVA_DEFAULT[k]||'mas');
+}
+
+// Los cortes se compran cubicados (lingotes, cabeceras), no en lámina: por eso en la lista
+// del proveedor esa fila no tiene valor por cm.
+function esDensidadCortes(densKey){return /cortes/i.test(densKey)}
+const NOMBRE_DENSIDAD={D21laminas:'D21 láminas',D21cortes:'D21 cortes'};
+function nombreDensidad(k){return NOMBRE_DENSIDAD[k]||k}
 
 function precioTapa(ancho){
   let base=0;
@@ -4959,125 +5048,203 @@ function costoLamina(densKey,espesorCm,anchoCm,largoCm){
   return vol*precioEspumaM3(densKey);
 }
 
-// Lingotes: 2 unidades, largo del colchón × ancho × alto, cortes D21
-function costoLingotes(largoCm){
+// Lingotes: 2 unidades, largo del colchón × ancho × alto. La densidad la trae la receta
+// (antes estaba fija en D21 cortes, así que un colchón con lingote más firme no se podía costear).
+function costoLingotes(largoCm,densKey){
   const largoReal=largoCm; // 190 o 200
   const vol=(largoReal/100)*(insumos.lingoteAncho/100)*(insumos.lingoteAlto/100);
-  return 2*vol*precioEspumaM3('D21cortes');
+  return 2*vol*precioEspumaM3(densKey||'D21cortes');
 }
 
 // Cabeceras: 2 unidades, ancho según plaza × 15 × 7 (cubicado), excepto 2pl que es precio fijo
-function costoCabeceras(plaza,largoCm){
+function costoCabeceras(plaza,largoCm,densKey){
   if(plaza==='2pl')return 2*insumos.cab2plFijo;
   let anchoCab=0;
   if(plaza==='1pl')anchoCab=insumos.cab1pl;
   else if(plaza==='15pl')anchoCab=insumos.cab15pl;
   else if(plaza==='king')anchoCab=insumos.cabKing;
-  // Si el colchón es de 2.00 m, se suman 5 cm al ancho de cabecera
-  if(largoCm===200)anchoCab+=5;
+  // El de 2.00 m lleva 5 cm más de cabecera que el de 1.90 m. Antes ese ajuste solo se
+  // aplicaba si el largo era exactamente 200, así que un colchón a medida (195, 210) no
+  // lo recibía. Ahora se interpola con la misma proporción: 190→+0, 200→+5, 210→+10.
+  anchoCab+=Math.max(0,(largoCm-190)/10*5);
   const vol=(anchoCab/100)*(insumos.lingoteAncho/100)*(insumos.cabAlto/100);
-  return 2*vol*precioEspumaM3('D21cortes');
+  return 2*vol*precioEspumaM3(densKey||'D21cortes');
+}
+
+// ============ RECETA CANÓNICA ============
+// Antes la receta era un molde fijo por modelo: bloque (soft) o lámina arriba + lámina abajo
+// (los resortados). Eso impedía armar un colchón de 3 o 4 capas. La forma canónica describe
+// el colchón completo por sí sola, sin depender de cuál de los 3 modelos sea:
+//   {base:'espuma'|'resorte', capas:[{d,cm,tipo}], tapaArriba:'jacquard'|'acolchada',
+//    tnt:0|1, costuras:N, perfil:'soft'|'infinitySoft'|'infinityPlus',
+//    lingotes:0|1, lingoteD:densidad, cabeceras:0|1, cabeceraD:densidad}
+// Lingotes y cabeceras dejaron de estar amarrados a "es resortado": son dos piezas más que se
+// ponen o no, con la densidad que uno quiera. Un colchón de espuma también puede llevarlas.
+// Las capas van de arriba hacia abajo. "perfil" decide el ancho de tira, cuántas fajas salen
+// por corte y las vueltas de cinta; se guarda como clave (no como número) para que siga
+// dependiendo de lo que haya en Insumos.
+const PERFILES_FAJA={
+  soft:{nom:'Soft (tira angosta)',tira:'tiraSoft',fajas:'fajasSoft',vueltas:'cintaVueltasSoft'},
+  infinitySoft:{nom:'Infinity Soft (tira media)',tira:'tiraIS',fajas:'fajasIS',vueltas:'cintaVueltasSoft'},
+  infinityPlus:{nom:'Infinity Plus (tira alta)',tira:'tiraIP',fajas:'fajasIP',vueltas:'cintaVueltasIP'}
+};
+function datosPerfil(perfil){
+  const p=PERFILES_FAJA[perfil]||PERFILES_FAJA.soft;
+  return {tiraAncho:insumos[p.tira]||0,fajasPorCorte:insumos[p.fajas]||1,vueltas:insumos[p.vueltas]||0};
+}
+
+// Convierte una receta vieja (bloqueD/arrD/abjD) a la forma canónica. Las recetas que ya
+// vienen con "capas" se devuelven tal cual. Sin esto, la configuración guardada en Firestore
+// por una versión anterior dejaría de costear.
+function normalizarRecetasMapa(mapa){
+  Object.keys(mapa).forEach(k=>{mapa[k]=normalizarReceta(mapa[k],k)});
+  return mapa;
+}
+function normalizarReceta(r,modeloHint){
+  if(!r)return null;
+  if(Array.isArray(r.capas)){
+    const out=Object.assign({},RECETA_BASE,r,
+      {capas:r.capas.map(c=>({d:c.d,cm:+c.cm||0,tipo:c.tipo||'laminas'}))});
+    // Recetas guardadas antes de que lingotes y cabeceras fueran opcionales: las llevaba
+    // todo resortado y ninguna de espuma. Sin esto, los tres modelos base perderían las
+    // dos piezas al recargar y el costo bajaría solo.
+    if(r.lingotes==null)out.lingotes=out.base==='resorte'?1:0;
+    if(r.cabeceras==null)out.cabeceras=out.base==='resorte'?1:0;
+    out.lingotes=out.lingotes?1:0;
+    out.cabeceras=out.cabeceras?1:0;
+    return out;
+  }
+  const esSoft=modeloHint==='soft'||r.bloqueD!=null;
+  const capas=esSoft
+    ? [{d:r.bloqueD,cm:+r.bloqueCm||0,tipo:r.bloqueTipo||'laminas'}]
+    : [{d:r.arrD,cm:+r.arrCm||0,tipo:'laminas'},{d:r.abjD,cm:+r.abjCm||0,tipo:'laminas'}];
+  return Object.assign({},RECETA_BASE,{
+    base:esSoft?'espuma':'resorte',
+    capas,
+    tapaArriba:modeloHint==='infinitySoft'?'jacquard':'acolchada',
+    tnt:r.tnt?1:0,
+    costuras:+r.costuras||0,
+    perfil:modeloHint||'soft',
+    lingotes:esSoft?0:1,
+    cabeceras:esSoft?0:1
+  });
+}
+
+// Espejo de los campos viejos sobre una receta canónica. Se guardan junto con "capas" para
+// que un equipo que todavía tenga cacheada la versión anterior de la app siga calculando
+// bien los tres modelos base en vez de quedar con costos en NaN.
+function conCamposLegacy(r){
+  const out=Object.assign({},r);
+  const c=r.capas||[];
+  if(r.base==='espuma'){
+    out.bloqueD=(c[0]||{}).d;out.bloqueCm=(c[0]||{}).cm||0;out.bloqueTipo=(c[0]||{}).tipo||'laminas';
+  }else{
+    out.arrD=(c[0]||{}).d;out.arrCm=(c[0]||{}).cm||0;
+    out.abjD=(c[1]||{}).d;out.abjCm=(c[1]||{}).cm||0;
+  }
+  out.tapaD=(c[0]||{}).d;out.tapaCm=1.5;
+  return out;
 }
 
 // ============ CALCULAR COSTO POR MODELO Y TAMAÑO ============
-// IVA por categoría para los 3 modelos (mismo criterio que en Crear colchón)
-const IVA_MODELO = {
-  espuma: 'mas',       // espuma neta + IVA
-  resorte: 'mas',      // resorte neto + IVA
-  tapaAcolch: 'mas',   // tapa acolchada con espuma neta + IVA
-  tela: 'mas',         // tela acolchada neta + IVA
-  jacquard: 'incl',    // tapas jacquard ya con IVA incluido
-  tnt: 'incl',         // TNT ya con IVA incluido
-  faja: 'mas',         // tela rollo neta + IVA
-  cinta: 'mas',        // cinta neta + IVA
-  pegamento: 'mas',    // pegamento neto + IVA
-  bolsa: 'incl',       // bolsa ya con IVA
-  mo: 'incl'           // mano de obra sin IVA (no genera)
-};
+// El criterio de IVA de cada línea sale de `insumos.iva` (editable en la pestaña Insumos),
+// no de una tabla fija: ver ivaDe().
 
-function calcularCosto(modelo,tam){
-  const r=recetas[modelo];
+// El tercer parámetro permite costear una receta suelta (un colchón armado a medida que
+// todavía no es un modelo). Si no viene, se usa la del modelo, como siempre.
+function calcularCosto(modelo,tam,recetaOverride){
+  const r=normalizarReceta(recetaOverride||recetaDeModelo(modelo),modelo);
+  if(!r)return {total:0,totalNeto:0,desglose:[],subtotalNetos:0,subtotalIncl:0,ivaCalc:0};
   const anchoM=tam.ancho/100;
   const largoM=tam.largo/100;
   const desglose=[];
 
-  if(modelo==='soft'){
-    const volBloque=anchoM*largoM*(r.bloqueCm/100);
-    const densKeyBloque=r.bloqueD;
-    const precioBloqueM3=r.bloqueTipo==='cortes'?precioEspumaM3('D21cortes'):precioEspumaM3(densKeyBloque);
-    const cBloque=volBloque*precioBloqueM3;
-    desglose.push({lbl:`Espuma bloque ${r.bloqueCm}cm ${densKeyBloque} (${r.bloqueTipo})`,val:cBloque,iva:IVA_MODELO.espuma,esEspuma:true});
-  } else {
+  if(r.base==='resorte'){
     const cRes=precioResorte(tam.plaza);
-    desglose.push({lbl:`Resorte ${tam.plaza==='king'?'King':tam.plaza==='2pl'?'2 plaza':tam.plaza==='15pl'?'1.5 plaza':'1 plaza'}`,val:cRes,iva:IVA_MODELO.resorte});
-    const cLing=costoLingotes(tam.largo);
-    desglose.push({lbl:`Lingotes 2× ${tam.largo}×${insumos.lingoteAncho}×${insumos.lingoteAlto} cm (D21 cortes)`,val:cLing,iva:IVA_MODELO.espuma,esEspuma:true});
-    const cCab=costoCabeceras(tam.plaza,tam.largo);
-    let cabDesc=tam.plaza==='2pl'?`Cabeceras 2× (precio fijo $${fmt2(insumos.cab2plFijo)})`:`Cabeceras 2× ${tam.plaza==='1pl'?(tam.largo===200?insumos.cab1pl+5:insumos.cab1pl):tam.plaza==='15pl'?(tam.largo===200?insumos.cab15pl+5:insumos.cab15pl):(tam.largo===200?insumos.cabKing+5:insumos.cabKing)}×${insumos.lingoteAncho}×${insumos.cabAlto} cm (D21 cortes)`;
-    desglose.push({lbl:cabDesc,val:cCab,iva:IVA_MODELO.espuma,esEspuma:true});
-    const cArr=costoLamina(r.arrD,r.arrCm,tam.ancho,tam.largo);
-    desglose.push({lbl:`Lámina arriba ${r.arrCm}cm ${r.arrD} (${tam.ancho}×${tam.largo})`,val:cArr,iva:IVA_MODELO.espuma,esEspuma:true});
-    const cAbj=costoLamina(r.abjD,r.abjCm,tam.ancho,tam.largo);
-    desglose.push({lbl:`Lámina abajo ${r.abjCm}cm ${r.abjD} (${tam.ancho}×${tam.largo})`,val:cAbj,iva:IVA_MODELO.espuma,esEspuma:true});
+    desglose.push({lbl:`Resorte ${tam.plaza==='king'?'King':tam.plaza==='2pl'?'2 plaza':tam.plaza==='15pl'?'1.5 plaza':'1 plaza'}`,val:cRes,iva:ivaDe('resortes')});
+  }
+  if(r.lingotes){
+    const cLing=costoLingotes(tam.largo,r.lingoteD);
+    desglose.push({lbl:`Lingotes 2× ${tam.largo}×${insumos.lingoteAncho}×${insumos.lingoteAlto} cm (${nombreDensidad(r.lingoteD)})`,val:cLing,iva:ivaDe('espuma'),esEspuma:true,dimensionada:esDensidadCortes(r.lingoteD)});
+  }
+  if(r.cabeceras){
+    const cCab=costoCabeceras(tam.plaza,tam.largo,r.cabeceraD);
+    const anchoCabDesc=Math.round((({'1pl':insumos.cab1pl,'15pl':insumos.cab15pl,king:insumos.cabKing})[tam.plaza]||0)+Math.max(0,(tam.largo-190)/10*5));
+    // En 2 plazas la cabecera se compra armada a precio cerrado, así que no se cubica ni
+    // depende de la densidad elegida: se avisa en el propio desglose para que no confunda.
+    const cabDesc=tam.plaza==='2pl'?`Cabeceras 2× (precio fijo $${fmt2(insumos.cab2plFijo)})`:`Cabeceras 2× ${anchoCabDesc}×${insumos.lingoteAncho}×${insumos.cabAlto} cm (${nombreDensidad(r.cabeceraD)})`;
+    desglose.push({lbl:cabDesc,val:cCab,iva:ivaDe('espuma'),esEspuma:true,dimensionada:tam.plaza==='2pl'||esDensidadCortes(r.cabeceraD)});
   }
 
+  // Capas de espuma, de arriba hacia abajo. Pueden ser 1 (un bloque) o las que sean.
+  const nCapas=r.capas.length;
+  r.capas.forEach((capa,i)=>{
+    if(!(capa.cm>0))return;
+    const pos=nCapas===1?'':i===0?' (arriba)':i===nCapas-1?' (abajo)':' (medio)';
+    const dimensionada=capa.tipo==='cortes'||esDensidadCortes(capa.d);
+    const precioM3=capa.tipo==='cortes'?precioEspumaM3('D21cortes'):precioEspumaM3(capa.d);
+    const val=(anchoM*largoM*(capa.cm/100))*precioM3;
+    const nom=(r.base==='espuma'&&nCapas===1)?'Espuma bloque':`Capa ${i+1}${pos}`;
+    desglose.push({lbl:`${nom} ${capa.cm}cm ${nombreDensidad(capa.d)}${dimensionada?' (dimensionada)':''}`,val,iva:ivaDe('espuma'),esEspuma:true,dimensionada});
+  });
+
   // Tapa superior
-  if(modelo==='infinitySoft'){
+  if(r.tapaArriba==='jacquard'){
     const cTapaArriba=precioTapa(tam.ancho);
-    desglose.push({lbl:`Tapa jacquard arriba ${tam.ancho}cm (+${insumos.tapasRecargo}%)`,val:cTapaArriba,iva:IVA_MODELO.jacquard});
+    desglose.push({lbl:`Tapa jacquard arriba ${tam.ancho}cm (+${insumos.tapasRecargo}%)`,val:cTapaArriba,iva:ivaDe('tapas')});
   } else {
     const cTapaAcol=insumos.tapaAcolchadaM*anchoM;
-    desglose.push({lbl:`Tapa acolchada c/espuma ${tam.ancho}cm × $${fmt2(insumos.tapaAcolchadaM)}/m`,val:cTapaAcol,iva:IVA_MODELO.tapaAcolch});
+    desglose.push({lbl:`Tapa acolchada c/espuma ${tam.ancho}cm × $${fmt2(insumos.tapaAcolchadaM)}/m`,val:cTapaAcol,iva:ivaDe('tapaAcolchadaM')});
     const cTela=insumos.telaM*anchoM;
-    desglose.push({lbl:`Tela ${tam.ancho}cm × $${fmt2(insumos.telaM)}/m`,val:cTela,iva:IVA_MODELO.tela});
+    desglose.push({lbl:`Tela ${tam.ancho}cm × $${fmt2(insumos.telaM)}/m`,val:cTela,iva:ivaDe('telaM')});
   }
 
   // Tapa jacquard abajo
   const cTapaJacq=precioTapa(tam.ancho);
-  desglose.push({lbl:`Tapa jacquard abajo ${tam.ancho}cm (+${insumos.tapasRecargo}%)`,val:cTapaJacq,iva:IVA_MODELO.jacquard});
+  desglose.push({lbl:`Tapa jacquard abajo ${tam.ancho}cm (+${insumos.tapasRecargo}%)`,val:cTapaJacq,iva:ivaDe('tapas')});
 
   // TNT
   if(r.tnt){
     const cTnt=insumos.tntM*anchoM*2;
-    desglose.push({lbl:`TNT 2× ${tam.ancho}cm × $${fmt2(insumos.tntM)}/m`,val:cTnt,iva:IVA_MODELO.tnt});
+    desglose.push({lbl:`TNT 2× ${tam.ancho}cm × $${fmt2(insumos.tntM)}/m`,val:cTnt,iva:ivaDe('tntM')});
   }
 
   // Faja
   const perimetroM=2*(anchoM+largoM);
   const largoCorteM=perimetroM+(insumos.fajaMargen/100);
-  let tiraAncho=0,fajasPorCorte=1;
-  if(modelo==='soft'){tiraAncho=insumos.tiraSoft;fajasPorCorte=insumos.fajasSoft}
-  else if(modelo==='infinitySoft'){tiraAncho=insumos.tiraIS;fajasPorCorte=insumos.fajasIS}
-  else if(modelo==='infinityPlus'){tiraAncho=insumos.tiraIP;fajasPorCorte=insumos.fajasIP}
+  const perfil=datosPerfil(r.perfil);
+  const tiraAncho=perfil.tiraAncho,fajasPorCorte=perfil.fajasPorCorte||1;
   const cFaja=(largoCorteM*insumos.telaRollo)/fajasPorCorte;
-  desglose.push({lbl:`Faja tela (tira ${tiraAncho}cm, ${largoCorteM.toFixed(2)}m × $${fmt2(insumos.telaRollo)} ÷ ${fajasPorCorte})`,val:cFaja,iva:IVA_MODELO.faja});
+  desglose.push({lbl:`Faja tela (tira ${tiraAncho}cm, ${largoCorteM.toFixed(2)}m × $${fmt2(insumos.telaRollo)} ÷ ${fajasPorCorte})`,val:cFaja,iva:ivaDe('telaRollo')});
 
   // Cinta
-  const vueltasCinta=modelo==='infinityPlus'?insumos.cintaVueltasIP:insumos.cintaVueltasSoft;
+  const vueltasCinta=perfil.vueltas;
   const largoCintaM=perimetroM*vueltasCinta+(insumos.cintaMargen/100);
   const cCinta=largoCintaM*insumos.cintaM;
-  desglose.push({lbl:`Cinta ${largoCintaM.toFixed(2)}m × $${fmt2(insumos.cintaM)} (${vueltasCinta} vueltas)`,val:cCinta,iva:IVA_MODELO.cinta});
+  desglose.push({lbl:`Cinta ${largoCintaM.toFixed(2)}m × $${fmt2(insumos.cintaM)} (${vueltasCinta} vueltas)`,val:cCinta,iva:ivaDe('cintaM')});
 
   // Pegamento
   if(insumos.pegamento>0){
-    desglose.push({lbl:'Pegamento',val:insumos.pegamento,iva:IVA_MODELO.pegamento});
+    desglose.push({lbl:'Pegamento',val:insumos.pegamento,iva:ivaDe('pegamento')});
   }
 
   // Bolsa
   if(insumos.bolsa>0){
-    desglose.push({lbl:'Bolsa',val:insumos.bolsa,iva:IVA_MODELO.bolsa});
+    desglose.push({lbl:'Bolsa',val:insumos.bolsa,iva:ivaDe('bolsa')});
   }
 
   // Mano de obra
   const cCostura=insumos.moCostura*r.costuras;
-  desglose.push({lbl:`Costuras (${r.costuras}× $${fmt2(insumos.moCostura)})`,val:cCostura,iva:IVA_MODELO.mo});
-  desglose.push({lbl:'Armado',val:insumos.moArmado,iva:IVA_MODELO.mo});
+  desglose.push({lbl:`Costuras (${r.costuras}× $${fmt2(insumos.moCostura)})`,val:cCostura,iva:ivaDe('moCostura')});
+  desglose.push({lbl:'Armado',val:insumos.moArmado,iva:ivaDe('moArmado')});
 
-  // Merma de corte: la espuma que se pierde igual se pagó, así que encarece cada item de espuma.
+  // Merma de corte: la espuma que se pierde al cortar igual se pagó. Solo corre para la que
+  // llega en lámina y se corta acá — la que se pide dimensionada llega lista y no genera
+  // recorte (por eso el m³ de cortes es más caro que el de láminas: el corte ya viene cobrado).
   const mermaPct=insumos.mermaEspumaPct||0;
   if(mermaPct>0){
     desglose.forEach(d=>{
-      if(d.esEspuma){
+      if(d.esEspuma&&!d.dimensionada){
         d.merma=d.val*mermaPct/100;
         d.val+=d.merma;
         d.lbl+=` +${mermaPct}% merma`;
@@ -5085,9 +5252,9 @@ function calcularCosto(modelo,tam){
     });
   }
 
-  // Gasto indirecto: monto fijo por colchón (arriendo, luz, transporte...). Sin IVA propio.
+  // Gasto indirecto: monto fijo por colchón (arriendo, luz, transporte...).
   if(insumos.gastoIndirecto>0){
-    desglose.push({lbl:'Gastos indirectos por colchón',val:insumos.gastoIndirecto,iva:'incl'});
+    desglose.push({lbl:'Gastos indirectos por colchón',val:insumos.gastoIndirecto,iva:ivaDe('gastoIndirecto')});
   }
 
   // Calcular totales con la lógica correcta:
@@ -5126,13 +5293,18 @@ let _calcGuardarTimer=null;
 function guardarConfigCalculadora(){
   clearTimeout(_calcGuardarTimer);
   _calcGuardarTimer=setTimeout(()=>{
-    setDoc(doc(db,'config','calculadora'),{insumos,recetas,margenes,autoPrecios})
+    // Los tres modelos base se guardan en forma canónica y además con los campos viejos,
+    // para que una versión anterior de la app cacheada en otro equipo siga costeándolos.
+    const recetasOut={};
+    Object.entries(recetas).forEach(([k,r])=>{recetasOut[k]=conCamposLegacy(normalizarReceta(r,k))});
+    setDoc(doc(db,'config','calculadora'),{insumos,recetas:recetasOut,modelosCustom,margenes,autoPrecios})
       .catch(e=>toast('⚠️ No se pudo guardar la configuración: '+e.message));
   },800);
 }
 
 // Etiquetas legibles para el historial (el path interno no le dice nada a nadie).
 const NOMBRE_INSUMO={
+  espuma:'Espuma',resortes:'Resortes',tapas:'Tapas jacquard',
   tapaAcolchadaM:'Tapa acolchada (m)',telaM:'Tela (m)',tntM:'TNT (m)',
   moArmado:'Mano de obra armado',moCostura:'Mano de obra costura',
   telaRollo:'Rollo tela faja',cintaM:'Cinta (m)',pegamento:'Pegamento',bolsa:'Bolsa',
@@ -5174,6 +5346,38 @@ function updInsumoCalc(path,val){
   programarAutoPrecios();
   renderCalculadora();
 }
+// Cambiar el criterio de IVA de un insumo mueve el costo tanto como cambiarle el precio,
+// así que también queda en el historial.
+function setIvaInsumo(k,val){
+  if(val!=='mas'&&val!=='incl')return;
+  if(!insumos.iva)insumos.iva={};
+  const antes=ivaDe(k);
+  if(antes===val)return;
+  insumos.iva[k]=val;
+  registrarHistorialCalc({tipo:'iva',campo:'iva.'+k,etiqueta:nombreInsumo(k),antes,despues:val});
+  guardarConfigCalculadora();
+  programarAutoPrecios();
+  renderCalculadora();
+}
+// Control chico de "+IVA / IVA incluido" que se pone al lado del precio al que corresponde.
+function ivaSelect(k){
+  const v=ivaDe(k);
+  return `<select onchange="setIvaInsumo('${k}',this.value)" style="font-size:11px;padding:3px 4px;margin-top:4px;width:100%">
+    <option value="mas" ${v==='mas'?'selected':''}>+ IVA 19%</option>
+    <option value="incl" ${v==='incl'?'selected':''}>IVA incluido</option>
+  </select>`;
+}
+// Versión en línea, para las tarjetas donde el criterio vale para todo un grupo de precios.
+function ivaSelectGrupo(k,texto){
+  const v=ivaDe(k);
+  return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+    <span class="muted" style="font-size:11px">${texto}</span>
+    <select onchange="setIvaInsumo('${k}',this.value)" style="font-size:11px;padding:3px 6px;width:auto">
+      <option value="mas" ${v==='mas'?'selected':''}>+ IVA 19%</option>
+      <option value="incl" ${v==='incl'?'selected':''}>IVA incluido</option>
+    </select>
+  </div>`;
+}
 // Precio de venta sugerido a partir de un costo y un margen (% de markup sobre el costo),
 // redondeado a los $100. Se usa en Costos y márgenes, y en Crear colchón.
 function precioSugeridoDesdeCosto(costo,margenPct){
@@ -5195,30 +5399,45 @@ function renderCalculadora(){
     </div>`;
 
   if(sub==='insumos'){
-    html+=`<div class="help">Edita los precios de tus materiales. Los costos se recalculan al instante y quedan guardados para todos tus equipos. El método de IVA ya está aplicado en el cálculo.</div>`;
+    html+=`<div class="help">Edita los precios de tus materiales. Los costos se recalculan al instante y quedan guardados para todos tus equipos. Junto a cada precio eliges si es <strong>neto (+IVA)</strong> o si ya viene <strong>con IVA incluido</strong>, tal como te lo cobra el proveedor.</div>`;
     // Espuma
-    html+=`<div class="card"><h4 style="margin-bottom:10px">🟨 Espuma (precio m³)</h4><div class="row3">
-      ${Object.entries(insumos.espuma).map(([k,v])=>`<div class="field"><label>${k}</label><input type="number" value="${v.m3}" onchange="updInsumoCalc('espuma.${k}.m3',this.value)"></div>`).join('')}
-    </div></div>`;
+    html+=`<div class="card"><h4 style="margin-bottom:4px">🟨 Espuma</h4>
+      <div class="muted" style="font-size:11px;margin-bottom:10px">Igual que la lista del proveedor. Editas el m³ y el valor de 1 cm se recalcula solo: es una lámina de ${LAMINA_ANCHO}×${LAMINA_LARGO} de un centímetro (${M3_POR_CM_LAMINA.toFixed(4)} m³). Todo el costo de espuma del sistema sale de estos precios.</div>
+      ${ivaSelectGrupo('espuma','Estos precios son:')}
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Densidad</th><th style="text-align:right">Valor m³</th><th style="text-align:right">1 cm</th></tr></thead><tbody>
+        ${Object.keys(insumos.espuma).map(k=>`<tr>
+          <td>${nombreDensidad(k)}</td>
+          <td style="text-align:right"><input type="number" value="${insumos.espuma[k].m3}" onchange="updInsumoCalc('espuma.${k}.m3',this.value)" style="text-align:right;max-width:120px"></td>
+          <td style="text-align:right">${esDensidadCortes(k)?'<span class="muted">—</span>':fmt(Math.round(precioEspumaCm(k)))}</td>
+        </tr>`).join('')}
+      </tbody></table></div>
+      <div class="muted" style="font-size:11px;margin-top:8px">Precios netos. Los cortes se compran cubicados, no en lámina — por eso no llevan valor por centímetro.</div>
+    </div>`;
     // Resortes
-    html+=`<div class="card"><h4 style="margin-bottom:10px">🌀 Resortes (unidad)</h4><div class="row3">
+    html+=`<div class="card"><h4 style="margin-bottom:10px">🌀 Resortes (unidad)</h4>
+      ${ivaSelectGrupo('resortes','Estos precios son:')}
+      <div class="row3">
       ${[['r1pl','1 plaza'],['r15pl','1.5 plazas'],['r2pl','2 plazas'],['rking','King']].map(([k,l])=>`<div class="field"><label>${l}</label><input type="number" value="${insumos.resortes[k]}" onchange="updInsumoCalc('resortes.${k}',this.value)"></div>`).join('')}
     </div></div>`;
     // Tapas
-    html+=`<div class="card"><h4 style="margin-bottom:10px">🛏️ Tapas (por medida de ancho)</h4><div class="row3">
+    html+=`<div class="card"><h4 style="margin-bottom:10px">🛏️ Tapas (por medida de ancho)</h4>
+      ${ivaSelectGrupo('tapas','Estos precios son:')}
+      <div class="row3">
       ${Object.entries(insumos.tapas).map(([k,v])=>`<div class="field"><label>${k.replace('t','')} cm</label><input type="number" value="${v}" onchange="updInsumoCalc('tapas.${k}',this.value)"></div>`).join('')}
     </div></div>`;
-    // Otros principales
+    // Otros principales. Cada uno con su propio criterio de IVA: la tela puede venir neta y
+    // la bolsa con IVA incluido, y así es como lo factura cada proveedor.
     const otros=[['tapaAcolchadaM','Tapa acolchada (m)'],['telaM','Tela (m)'],['tntM','TNT (m)'],['moArmado','Mano de obra armado'],['moCostura','Mano de obra costura'],['telaRollo','Rollo tela faja'],['cintaM','Cinta (m)'],['pegamento','Pegamento'],['bolsa','Bolsa']];
     html+=`<div class="card"><h4 style="margin-bottom:10px">🧵 Otros insumos</h4><div class="row3">
-      ${otros.map(([k,l])=>`<div class="field"><label>${l}</label><input type="number" value="${insumos[k]}" onchange="updInsumoCalc('${k}',this.value)"></div>`).join('')}
+      ${otros.map(([k,l])=>`<div class="field"><label>${l}</label><input type="number" value="${insumos[k]}" onchange="updInsumoCalc('${k}',this.value)">${ivaSelect(k)}</div>`).join('')}
     </div></div>`;
     // Merma y gastos indirectos
     html+=`<div class="card"><h4 style="margin-bottom:4px">📉 Merma y gastos indirectos</h4>
       <div class="muted" style="font-size:11px;margin-bottom:10px">La espuma que se pierde al cortar igual la pagaste, y el arriendo o la luz no aparecen en ningún insumo. Ponlos aquí y se reparten en el costo de cada colchón. En 0 no afectan nada.</div>
       <div class="row">
-        <div class="field"><label>Merma de espuma (%)</label><input type="number" step="0.1" value="${insumos.mermaEspumaPct||0}" onchange="updInsumoCalc('mermaEspumaPct',this.value)"></div>
-        <div class="field"><label>Gasto indirecto por colchón ($)</label><input type="number" value="${insumos.gastoIndirecto||0}" onchange="updInsumoCalc('gastoIndirecto',this.value)"></div>
+        <div class="field"><label>Merma de espuma (%)</label><input type="number" step="0.1" value="${insumos.mermaEspumaPct||0}" onchange="updInsumoCalc('mermaEspumaPct',this.value)"><div class="muted" style="font-size:10px;margin-top:4px;text-transform:none;letter-spacing:normal;font-weight:400">Solo se aplica a la espuma que llega en lámina y cortas tú. La que pides dimensionada (cortes, lingotes, cabeceras) no genera recorte.</div></div>
+        <div class="field"><label>Gasto indirecto por colchón ($)</label><input type="number" value="${insumos.gastoIndirecto||0}" onchange="updInsumoCalc('gastoIndirecto',this.value)">${ivaSelect('gastoIndirecto')}</div>
       </div>
     </div>`;
     html+=`<button class="btn btn-sec" style="width:100%" onclick="restaurarInsumosDefault()">↩️ Restaurar valores originales</button>`;
@@ -5244,8 +5463,8 @@ function renderCalculadora(){
       </div>
     </div>`;
     const sugerido=precioSugeridoDesdeCosto;
-    Object.entries(MODELOS_CALC).forEach(([mKey,mNom])=>{
-      html+=`<div class="card" style="border-top:3px solid var(--gold)"><h4 style="margin-bottom:10px">${mNom}</h4>
+    Object.entries(modelosCalcTodos()).forEach(([mKey,mNom])=>{
+      html+=`<div class="card" style="border-top:3px solid ${esModeloCustom(mKey)?'#166534':'var(--gold)'}"><h4 style="margin-bottom:10px">${escHtml(mNom)}${esModeloCustom(mKey)?' <span class="muted" style="font-size:10px;font-weight:400">modelo a medida</span>':''}</h4>
         <div class="tbl-wrap"><table>
         <thead><tr><th>Tamaño</th><th style="text-align:right">Costo fab.</th><th style="text-align:right">Precio min. actual</th><th style="text-align:right">Margen actual</th><th style="text-align:right">Sugerido may.</th><th style="text-align:right">Sugerido min.</th></tr></thead><tbody>`;
       TAMANOS.forEach(t=>{
@@ -5275,13 +5494,16 @@ function renderCalculadora(){
         <div class="muted" style="font-size:11px;margin-bottom:10px">Creados desde "Crear colchón". Se recalculan y actualizan igual que los estándar.</div>
         <div class="tbl-wrap"><table>
         <thead><tr><th>Producto</th><th style="text-align:right">Costo fab.</th><th style="text-align:right">Precio min. actual</th><th style="text-align:right">Margen actual</th><th style="text-align:right">Sugerido may.</th><th style="text-align:right">Sugerido min.</th></tr></thead><tbody>`;
-      aMedida.forEach(({prod,modelo,tam})=>{
-        const costo=Math.round(calcularCosto(modelo,tam).total);
+      aMedida.forEach(({prod,modelo,tam,receta})=>{
+        const costo=Math.round(costoDeItem({modelo,tam,receta}).total);
         const precioMin=prod.min!=null?prod.min:null;
         const margen=precioMin!==null?precioMin-costo:null;
         const margenPct=(precioMin!==null&&costo>0)?Math.round((precioMin-costo)/costo*100):null;
+        const desc=modelo==='aMedida'
+          ? `receta propia · ${(receta.capas||[]).length} capa${(receta.capas||[]).length!==1?'s':''}`
+          : nombreModelo(modelo);
         html+=`<tr>
-          <td>${escHtml(prod.nombre)}<div class="muted" style="font-size:10px">${MODELOS_CALC[modelo]||modelo} · ${tam.ancho}×${tam.largo}</div></td>
+          <td>${escHtml(prod.nombre)}<div class="muted" style="font-size:10px">${escHtml(desc)} · ${tam.ancho}×${tam.largo}</div></td>
           <td style="text-align:right"><strong>${fmt(costo)}</strong></td>
           <td style="text-align:right">${precioMin!==null?fmt(precioMin):'<span class="muted">—</span>'}</td>
           <td style="text-align:right">${margen!==null?`<strong style="color:${margen>0?'#166534':'#dc2626'}">${margenPct>0?'+':''}${margenPct}% (${margen>0?'+':''}${fmt(margen)})</strong>`:'<span class="muted">—</span>'}</td>
@@ -5293,8 +5515,8 @@ function renderCalculadora(){
     }
 
     // Aviso de colchones que se están vendiendo bajo costo o con margen muy flaco
-    const enRiesgo=colchonesCosteables().map(({prod,modelo,tam})=>{
-      const costo=Math.round(calcularCosto(modelo,tam).total);
+    const enRiesgo=colchonesCosteables().map(({prod,aMedida:_,...it})=>{
+      const costo=Math.round(costoDeItem(it).total);
       if(prod.min==null||costo<=0)return null;
       const pct=Math.round((prod.min-costo)/costo*100);
       return pct<10?{nombre:prod.nombre,pct,costo,min:prod.min}:null;
@@ -5326,75 +5548,183 @@ function renderCalculadora(){
   cont.innerHTML=html;
 }
 
+// =========== EDITOR DE CAPAS (compartido) ===========
+// Lo usan tanto Recetas (para los modelos) como Crear colchón (para uno suelto). El destino
+// es 'crear' o la clave de un modelo, así el mismo control sirve para los dos.
+function recetaEnEdicion(destino){
+  if(destino==='crear')return estadoCrear().receta;
+  return recetaDeModelo(destino);
+}
+function tocarReceta(destino){
+  // El colchón en pantalla todavía no existe en ninguna parte: no hay nada que guardar.
+  if(destino!=='crear'){guardarConfigCalculadora();programarAutoPrecios()}
+  renderCalculadora();
+}
+function capaSet(destino,i,campo,val){
+  const r=recetaEnEdicion(destino);if(!r||!r.capas[i])return;
+  if(campo==='cm')r.capas[i].cm=Math.max(0,parseFloat(String(val).replace(',','.'))||0);
+  else if(campo==='d'){
+    r.capas[i].d=val;
+    // El tipo deja de ser una elección aparte: la propia densidad dice si es lámina o corte.
+    r.capas[i].tipo=esDensidadCortes(val)?'cortes':'laminas';
+  }
+  tocarReceta(destino);
+}
+function capaAdd(destino){
+  const r=recetaEnEdicion(destino);if(!r)return;
+  const ultima=r.capas[r.capas.length-1];
+  r.capas.push({d:ultima?ultima.d:'D21laminas',cm:ultima?ultima.cm:2.5,tipo:'laminas'});
+  tocarReceta(destino);
+}
+function capaDel(destino,i){
+  const r=recetaEnEdicion(destino);if(!r)return;
+  r.capas.splice(i,1);
+  tocarReceta(destino);
+}
+function capaMover(destino,i,dir){
+  const r=recetaEnEdicion(destino);if(!r)return;
+  const j=i+dir;if(j<0||j>=r.capas.length)return;
+  const t=r.capas[i];r.capas[i]=r.capas[j];r.capas[j]=t;
+  tocarReceta(destino);
+}
+function opcionesDensidad(sel){
+  return Object.keys(insumos.espuma).map(k=>
+    `<option value="${k}" ${sel===k?'selected':''}>${nombreDensidad(k)} — ${fmt2(precioEspumaM3(k))}/m³</option>`).join('');
+}
+// `tam` es opcional: si viene, cada capa muestra lo que cuesta en esa medida.
+function editorCapas(destino,r,tam){
+  const capas=r.capas||[];
+  const alto=capas.reduce((a,c)=>a+(+c.cm||0),0);
+  let h=`<div style="display:flex;justify-content:space-between;align-items:baseline;margin:14px 0 8px">
+    <label style="margin:0">Capas de espuma</label>
+    <span class="muted" style="font-size:11px">${capas.length===1?'1 capa':capas.length+' capas'} · alto ${(Math.round(alto*10)/10)} cm</span>
+  </div>`;
+  if(!capas.length)h+=`<div class="empty" style="padding:12px">Sin capas todavía. Agrega al menos una.</div>`;
+  capas.forEach((c,i)=>{
+    const pos=capas.length===1?'Única':i===0?'Arriba':i===capas.length-1?'Abajo':'Medio';
+    const btnBase='background:none;border:1px solid var(--border);border-radius:4px;line-height:1;padding:2px 5px;font-size:10px';
+    const btn=off=>btnBase+(off?';opacity:.25;cursor:default':';cursor:pointer');
+    let costo='';
+    if(tam&&tam.ancho>0&&tam.largo>0&&c.cm>0){
+      const p=c.tipo==='cortes'?precioEspumaM3('D21cortes'):precioEspumaM3(c.d);
+      costo=`<div class="muted" style="font-size:10px;margin:-2px 0 8px 30px">${((tam.ancho/100)*(tam.largo/100)*(c.cm/100)).toFixed(4)} m³ · ${fmt(Math.round((tam.ancho/100)*(tam.largo/100)*(c.cm/100)*p))}</div>`;
+    }
+    h+=`<div style="display:flex;gap:6px;align-items:flex-end;margin-bottom:4px">
+      <div style="display:flex;flex-direction:column;gap:2px;padding-bottom:4px">
+        <button style="${btn(i===0)}" ${i===0?'disabled':''} onclick="capaMover('${destino}',${i},-1)" title="Subir">▲</button>
+        <button style="${btn(i===capas.length-1)}" ${i===capas.length-1?'disabled':''} onclick="capaMover('${destino}',${i},1)" title="Bajar">▼</button>
+      </div>
+      <div class="field" style="flex:3;margin:0"><label>${i+1}. ${pos}</label>
+        <select onchange="capaSet('${destino}',${i},'d',this.value)">${opcionesDensidad(c.d)}</select></div>
+      <div class="field" style="flex:1;margin:0"><label>cm</label>
+        <input type="number" step="0.5" min="0" value="${c.cm}" onchange="capaSet('${destino}',${i},'cm',this.value)"></div>
+      <button onclick="capaDel('${destino}',${i})" style="background:none;border:none;cursor:pointer;font-size:13px;padding-bottom:6px" title="Quitar capa">🗑️</button>
+    </div>${costo}`;
+  });
+  h+=`<button class="btn btn-sec" style="width:100%;margin-top:4px" onclick="capaAdd('${destino}')">➕ Agregar capa</button>`;
+  return h;
+}
+// Terminaciones: lo que no es capa de espuma pero define el colchón igual.
+function editorTerminaciones(destino,r){
+  return `<div class="row3" style="margin-top:14px">
+      <div class="field"><label>Base</label><select onchange="recetaSet('${destino}','base',this.value)">
+        ${r.base?'':'<option value="" selected>— elige —</option>'}
+        ${[['espuma','Espuma sólida'],['resorte','Resorte']].map(([k,l])=>`<option value="${k}" ${r.base===k?'selected':''}>${l}</option>`).join('')}
+      </select></div>
+      <div class="field"><label>Tapa de arriba</label><select onchange="recetaSet('${destino}','tapaArriba',this.value)">
+        ${[['acolchada','Acolchada + tela'],['jacquard','Jacquard']].map(([k,l])=>`<option value="${k}" ${r.tapaArriba===k?'selected':''}>${l}</option>`).join('')}
+      </select></div>
+      <div class="field"><label>Lleva TNT</label><select onchange="recetaSet('${destino}','tnt',this.value==='si')">
+        <option value="si" ${r.tnt?'selected':''}>Sí</option>
+        <option value="no" ${!r.tnt?'selected':''}>No</option>
+      </select></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Costuras</label><input type="number" step="1" min="0" value="${r.costuras}" onchange="recetaSet('${destino}','costuras',this.value)"></div>
+      <div class="field"><label>Perfil de faja y cinta</label><select onchange="recetaSet('${destino}','perfil',this.value)">
+        ${Object.entries(PERFILES_FAJA).map(([k,p])=>`<option value="${k}" ${r.perfil===k?'selected':''}>${p.nom}</option>`).join('')}
+      </select></div>
+    </div>
+    <div class="muted" style="font-size:11px;margin-top:6px">Perfil: tira de ${datosPerfil(r.perfil).tiraAncho} cm, ${datosPerfil(r.perfil).fajasPorCorte} fajas por corte y ${datosPerfil(r.perfil).vueltas} vueltas de cinta. La tapa jacquard de abajo va siempre, y se cobra según el ancho.</div>
+    ${editorPiezasCortadas(destino,r)}`;
+}
+// Lingotes y cabeceras: las dos piezas que se piden cortadas a medida. Antes iban solas con
+// todo lo resortado y siempre en D21 cortes; ahora se ponen o se quitan y cada una elige su
+// densidad. El alto y el ancho siguen saliendo de Insumos, iguales para toda la producción.
+function editorPiezasCortadas(destino,r){
+  const fila=(campo,campoD,titulo,dim)=>`
+    <div style="border:1px solid var(--border);border-radius:8px;padding:10px;margin-top:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <strong style="font-size:12px">${titulo}</strong>
+        <select onchange="recetaSet('${destino}','${campo}',this.value==='si')" style="font-size:11px;padding:3px 6px;width:auto">
+          <option value="si" ${r[campo]?'selected':''}>Lleva</option>
+          <option value="no" ${!r[campo]?'selected':''}>No lleva</option>
+        </select>
+      </div>
+      ${r[campo]?`<div class="field" style="margin:8px 0 0"><label>Densidad</label>
+        <select onchange="recetaSet('${destino}','${campoD}',this.value)">${opcionesDensidad(r[campoD])}</select>
+        <div class="muted" style="font-size:10px;margin-top:4px;text-transform:none;letter-spacing:normal;font-weight:400">${dim}</div>
+      </div>`:''}
+    </div>`;
+  return `<div style="margin-top:14px"><label>Piezas cortadas</label>
+    ${fila('lingotes','lingoteD','🪵 Lingotes (2×)',`${insumos.lingoteAlto} × ${insumos.lingoteAncho} cm por el largo del colchón, según Insumos.`)}
+    ${fila('cabeceras','cabeceraD','🛡️ Cabeceras (2×)',`${insumos.cabAlto} × ${insumos.lingoteAncho} cm por el ancho de la plaza, según Insumos. En 2 plazas se cobra el precio fijo de $${fmt2(insumos.cab2plFijo)} c/u y la densidad no entra al cálculo.`)}
+  </div>`;
+}
+function recetaSet(destino,campo,val){
+  const r=recetaEnEdicion(destino);if(!r)return;
+  if(campo==='costuras')r.costuras=Math.max(0,parseInt(val)||0);
+  else if(campo==='tnt')r.tnt=val?1:0;
+  else if(campo==='lingotes'||campo==='cabeceras')r[campo]=val?1:0;
+  else r[campo]=val;
+  // Al elegir "Resorte" en un colchón que se está armando desde cero, los lingotes y las
+  // cabeceras se encienden solos: no existe un resortado sin ellos. Quedan a la vista y se
+  // pueden apagar. En las recetas ya guardadas no se toca nada.
+  if(destino==='crear'&&campo==='base'&&val==='resorte'&&!r.lingotes&&!r.cabeceras){
+    r.lingotes=1;r.cabeceras=1;
+  }
+  tocarReceta(destino);
+}
+
 // =========== EDITOR DE RECETAS ===========
 // La receta define de qué está hecho cada modelo. Antes solo se podía cambiar en el código;
 // ahora se edita aquí y el costo de todos los tamaños se recalcula al instante.
-function updRecetaCalc(modelo,campo,val){
-  const r=recetas[modelo];
-  if(!r)return;
-  const numericos=['bloqueCm','arrCm','abjCm','costuras'];
-  if(numericos.includes(campo))r[campo]=Math.max(0,parseFloat(String(val).replace(',','.'))||0);
-  else if(campo==='tnt')r[campo]=val?1:0;
-  else r[campo]=val;
-  guardarConfigCalculadora();
-  programarAutoPrecios();
-  renderCalculadora();
-}
 async function restaurarRecetasDefault(){
-  if(!(await confirmDialog('¿Volver a las recetas originales de los tres modelos?')))return;
-  recetas=JSON.parse(JSON.stringify(RECETAS_DEFAULT));
+  if(!(await confirmDialog('¿Volver a las recetas originales de los tres modelos? Los modelos que creaste a medida no se tocan.')))return;
+  recetas=normalizarRecetasMapa(JSON.parse(JSON.stringify(RECETAS_DEFAULT)));
   guardarConfigCalculadora();
   programarAutoPrecios();
   renderCalculadora();
 }
-function selectDensidad(modelo,campo,valor){
-  return `<select onchange="updRecetaCalc('${modelo}','${campo}',this.value)">
-    ${Object.keys(insumos.espuma).map(k=>`<option value="${k}" ${valor===k?'selected':''}>${k}</option>`).join('')}
-  </select>`;
+async function eliminarModeloCustom(key){
+  const usados=inventario.filter(p=>p.calc&&p.calc.modelo===key&&!p.calc.receta);
+  const aviso=usados.length
+    ? `<br><br>Hay ${nColchones(usados.length)} en el inventario usando este modelo: <strong>${usados.map(p=>escHtml(p.nombre)).join(', ')}</strong>. Se quedan con el costo que tienen ahora, pero dejan de recalcularse solos.`
+    : '';
+  if(!(await confirmDialog('',{html:`¿Eliminar el modelo "${escHtml(nombreModelo(key))}"?${aviso}`,danger:true,okText:'Eliminar'})))return;
+  delete modelosCustom[key];
+  guardarConfigCalculadora();
+  renderCalculadora();
 }
 function renderRecetas(){
-  let html=`<div class="help">De qué está hecho cada modelo. Cambia una densidad o un espesor y el costo de todos los tamaños se recalcula solo — no hace falta tocar nada más. Los precios de cada material se editan en Insumos.</div>`;
+  let html=`<div class="help">De qué está hecho cada modelo. Agrega o quita capas de espuma, cambia una densidad o un espesor, y el costo de todos los tamaños se recalcula solo. Los precios de cada material se editan en Insumos.</div>`;
 
-  Object.entries(MODELOS_CALC).forEach(([mKey,mNom])=>{
-    const r=recetas[mKey];
+  Object.entries(modelosCalcTodos()).forEach(([mKey,mNom])=>{
+    const r=recetaDeModelo(mKey);
     if(!r)return;
+    const custom=esModeloCustom(mKey);
     // Referencia rápida: cuánto cuesta este modelo en 2 plazas con la receta actual
     const tamRef=TAMANOS.find(t=>t.key==='150x190');
     const costoRef=tamRef?Math.round(calcularCosto(mKey,tamRef).total):0;
 
-    html+=`<div class="card" style="border-top:3px solid var(--gold)">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-        <h4>${mNom}</h4>
+    html+=`<div class="card" style="border-top:3px solid ${custom?'#166534':'var(--gold)'}">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
+        <h4>${escHtml(mNom)}${custom?' <span class="muted" style="font-size:10px;font-weight:400">a medida</span>':''}</h4>
         <span class="muted" style="font-size:11px">150×190 cuesta ${fmt(costoRef)}</span>
-      </div>`;
-
-    if(mKey==='soft'){
-      html+=`<div class="row3">
-        <div class="field"><label>Densidad del bloque</label>${selectDensidad(mKey,'bloqueD',r.bloqueD)}</div>
-        <div class="field"><label>Tipo de bloque</label><select onchange="updRecetaCalc('${mKey}','bloqueTipo',this.value)">
-          ${[['laminas','Láminas'],['cortes','Cortes']].map(([k,l])=>`<option value="${k}" ${r.bloqueTipo===k?'selected':''}>${l}</option>`).join('')}
-        </select></div>
-        <div class="field"><label>Espesor del bloque (cm)</label><input type="number" step="0.5" value="${r.bloqueCm}" onchange="updRecetaCalc('${mKey}','bloqueCm',this.value)"></div>
-      </div>`;
-    }else{
-      html+=`<div class="row3">
-        <div class="field"><label>Densidad lámina arriba</label>${selectDensidad(mKey,'arrD',r.arrD)}</div>
-        <div class="field"><label>Espesor arriba (cm)</label><input type="number" step="0.5" value="${r.arrCm}" onchange="updRecetaCalc('${mKey}','arrCm',this.value)"></div>
-        <div class="field"><label>Densidad lámina abajo</label>${selectDensidad(mKey,'abjD',r.abjD)}</div>
       </div>
-      <div class="row3">
-        <div class="field"><label>Espesor abajo (cm)</label><input type="number" step="0.5" value="${r.abjCm}" onchange="updRecetaCalc('${mKey}','abjCm',this.value)"></div>
-      </div>`;
-    }
-
-    html+=`<div class="row3">
-        <div class="field"><label>Costuras</label><input type="number" step="1" value="${r.costuras}" onchange="updRecetaCalc('${mKey}','costuras',this.value)"></div>
-        <div class="field"><label>Lleva TNT</label><select onchange="updRecetaCalc('${mKey}','tnt',this.value==='si')">
-          <option value="si" ${r.tnt?'selected':''}>Sí</option>
-          <option value="no" ${!r.tnt?'selected':''}>No</option>
-        </select></div>
-      </div>
-      <div class="muted" style="font-size:11px;margin-top:8px">Tapa: ${mKey==='infinitySoft'?'jacquard arriba y abajo':'acolchada con espuma + tela arriba, jacquard abajo'} · se cobra según el ancho del colchón.</div>
+      ${editorCapas(mKey,r,tamRef)}
+      ${editorTerminaciones(mKey,r)}
+      ${custom?`<button class="btn btn-sec" style="width:100%;margin-top:10px;color:#dc2626" onclick="eliminarModeloCustom('${mKey}')">🗑️ Eliminar este modelo</button>`:''}
     </div>`;
   });
 
@@ -5457,6 +5787,9 @@ function renderHistorialCalc(){
       const pct=h.antes?Math.round((h.despues-h.antes)/h.antes*100):null;
       detalle=`<span>${escHtml(h.etiqueta||h.campo)}: ${fmtValorInsumo(h.campo,h.antes)} → <strong>${fmtValorInsumo(h.campo,h.despues)}</strong>
         ${pct!==null?`<span style="color:${sube?'#dc2626':'#166534'}">${pct>0?'+':''}${pct}%</span>`:'<span class="muted" style="font-size:10px">sin valor previo</span>'}</span>`;
+    }else if(h.tipo==='iva'){
+      const txt=v=>v==='mas'?'+ IVA 19%':'IVA incluido';
+      detalle=`<span>🧾 IVA de ${escHtml(h.etiqueta||h.campo)}: ${txt(h.antes)} → <strong>${txt(h.despues)}</strong></span>`;
     }else if(h.tipo==='costos'){
       detalle=`<span>📥 Costos aplicados al inventario · ${h.n} colchones${h.totalCosto?' · suma '+fmt(h.totalCosto):''}</span>`;
     }else if(h.tipo==='precios'){
@@ -5475,90 +5808,225 @@ function renderHistorialCalc(){
   return html;
 }
 
-// =========== CREAR COLCHÓN (a medida, con desglose completo) ===========
+// =========== CREAR COLCHÓN (armado desde cero) ===========
+// Antes esta pestaña solo dejaba elegir uno de los tres modelos y cambiarle la medida: la
+// composición venía fija de la receta del modelo. Ahora el colchón se arma capa por capa y
+// la receta es suya; recién si te convence la guardas como modelo.
+// En blanco es en blanco: sin medidas, sin base elegida y sin ninguna capa. Nada de lo que
+// aparezca en el desglose viene de un supuesto — todo lo puso alguien. Lo que sí trae valor
+// son las terminaciones, porque no son piezas que se agreguen sino atributos que el colchón
+// tiene siempre (una tapa, un perfil de faja): se cambian, no se "ponen".
+const RECETA_EN_BLANCO={
+  base:'',
+  capas:[],
+  tapaArriba:'acolchada',tnt:0,costuras:2,perfil:'soft',
+  lingotes:0,lingoteD:'D21cortes',cabeceras:0,cabeceraD:'D21cortes'
+};
+function estadoCrear(){
+  if(!window._crearColchon)window._crearColchon={
+    ancho:0,largo:0,plaza:'',nombre:'',nombreTocado:false,nombreModelo:'',
+    receta:JSON.parse(JSON.stringify(RECETA_EN_BLANCO))
+  };
+  return window._crearColchon;
+}
 function updCrearColchon(campo,val){
-  if(!window._crearColchon)window._crearColchon={modelo:'infinityPlus',ancho:150,largo:190,plaza:'2pl',nombre:''};
-  if(campo==='ancho'||campo==='largo')window._crearColchon[campo]=parseFloat(String(val).replace(',','.'))||0;
-  else window._crearColchon[campo]=val;
+  const cc=estadoCrear();
+  if(campo==='ancho'||campo==='largo'){
+    cc[campo]=Math.max(0,parseFloat(String(val).replace(',','.'))||0);
+    // La plaza define resorte y cabecera. Se propone sola con el primer ancho que se escribe,
+    // así el costo sale completo de una; después se cambia a mano y ya no se vuelve a tocar.
+    if(campo==='ancho'&&cc.ancho>0&&!cc.plaza)cc.plaza=plazaSugerida(cc.ancho);
+  }
+  else if(campo==='nombre'){cc.nombre=val;cc.nombreTocado=!!String(val).trim()}
+  else cc[campo]=val;
   renderCalculadora();
 }
+// Volver a empezar de cero sin tener que borrar capa por capa.
+function limpiarCrearColchon(){
+  window._crearColchon=null;
+  renderCalculadora();
+}
+// Partir de un modelo existente es solo una comodidad: lo que se copia es la receta, y desde
+// ahí queda suelta. Tocar una capa después no cambia el modelo del que salió.
+function plantillaCrear(key){
+  const cc=estadoCrear();
+  const base=key==='blanco'?RECETA_EN_BLANCO:recetaDeModelo(key);
+  if(!base)return;
+  cc.receta=JSON.parse(JSON.stringify(normalizarReceta(base,key)));
+  renderCalculadora();
+}
+// La plaza define resorte y cabecera, así que si no calza con el ancho el costo sale inflado
+// o corto sin que se note en el desglose.
+function plazaSugerida(ancho){
+  if(ancho<=95)return '1pl';
+  if(ancho<=115)return '15pl';
+  if(ancho<=160)return '2pl';
+  return 'king';
+}
+const NOMBRE_PLAZA={'1pl':'1 plaza','15pl':'1.5 plazas','2pl':'2 plazas',king:'King'};
+// Si la composición es idéntica a la de un modelo, el producto se cuelga de ese modelo en vez
+// de llevar copia propia: así editar el modelo después también lo actualiza a él.
+function modeloEquivalente(receta){
+  const limpia=r=>JSON.stringify({base:r.base,capas:r.capas,tapaArriba:r.tapaArriba,tnt:r.tnt?1:0,
+    costuras:r.costuras,perfil:r.perfil,lingotes:r.lingotes?1:0,cabeceras:r.cabeceras?1:0,
+    lingoteD:r.lingotes?r.lingoteD:null,cabeceraD:r.cabeceras?r.cabeceraD:null});
+  const objetivo=limpia(receta);
+  return Object.keys(modelosCalcTodos()).find(k=>{
+    const r=recetaDeModelo(k);
+    return r&&limpia(normalizarReceta(r,k))===objetivo;
+  })||null;
+}
+function nombreDefaultCrear(){
+  const cc=estadoCrear();
+  const eq=modeloEquivalente(cc.receta);
+  if(eq)return `${nombreModelo(eq)} ${cc.ancho}x${cc.largo}`;
+  const alto=cc.receta.capas.reduce((a,c)=>a+(+c.cm||0),0);
+  return `${cc.receta.base==='resorte'?'Resortado':'Espuma'} ${Math.round(alto*10)/10}cm ${cc.ancho}x${cc.largo}`;
+}
 function renderCrearColchon(){
-  if(!window._crearColchon)window._crearColchon={modelo:'infinityPlus',ancho:150,largo:190,plaza:'2pl',nombre:''};
-  const cc=window._crearColchon;
-  let html=`<div class="help">Arma un colchón a medida (no tiene que ser uno de los tamaños estándar) y mira el desglose de costo completo, insumo por insumo. Si te sirve, créalo directo como producto nuevo en el inventario.</div>
+  const cc=estadoCrear();
+  const r=cc.receta;
+  const tam={ancho:cc.ancho,largo:cc.largo,plaza:cc.plaza};
+  const eq=modeloEquivalente(r);
+
+  let html=`<div class="help">Arma un colchón desde cero: parte en blanco, le pones la medida, la base, las capas de espuma que quieras y las terminaciones. Cada valor se calcula apenas lo ingresas. No tiene que parecerse a ninguno de los modelos ni usar un tamaño estándar. Si te sirve, lo creas como producto o lo guardas como modelo nuevo.</div>
+
+  <div class="card">
+    <label>Partir de</label>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">
+      ${Object.entries(modelosCalcTodos()).map(([k,l])=>`<button class="btn btn-sec" style="flex:1 1 40%;font-size:12px" onclick="plantillaCrear('${k}')">${escHtml(l)}</button>`).join('')}
+    </div>
+    <div class="muted" style="font-size:11px;margin-top:6px">Opcional: copia la composición de un modelo como punto de partida. Después la editas libremente sin afectar al modelo original.</div>
+    <button class="btn btn-sec" style="width:100%;margin-top:8px;font-size:12px" onclick="limpiarCrearColchon()">🧹 Empezar de cero</button>
+  </div>
+
   <div class="card">
     <div class="row">
-      <div class="field"><label>Modelo</label><select onchange="updCrearColchon('modelo',this.value)">
-        ${Object.entries(MODELOS_CALC).map(([k,l])=>`<option value="${k}" ${cc.modelo===k?'selected':''}>${l}</option>`).join('')}
-      </select></div>
-      <div class="field"><label>Plaza <span style="text-transform:none;font-weight:400">— define resorte/cabecera</span></label><select onchange="updCrearColchon('plaza',this.value)">
-        ${[['1pl','1 plaza'],['15pl','1.5 plazas'],['2pl','2 plazas'],['king','King']].map(([k,l])=>`<option value="${k}" ${cc.plaza===k?'selected':''}>${l}</option>`).join('')}
-      </select></div>
+      <div class="field"><label>Ancho (cm)</label><input type="number" min="0" value="${cc.ancho||''}" placeholder="—" onchange="updCrearColchon('ancho',this.value)"></div>
+      <div class="field"><label>Largo (cm)</label><input type="number" min="0" value="${cc.largo||''}" placeholder="—" onchange="updCrearColchon('largo',this.value)"></div>
     </div>
-    <div class="row">
-      <div class="field"><label>Ancho (cm)</label><input type="number" value="${cc.ancho}" onchange="updCrearColchon('ancho',this.value)"></div>
-      <div class="field"><label>Largo (cm)</label><input type="number" value="${cc.largo}" onchange="updCrearColchon('largo',this.value)"></div>
-    </div>
+    <div class="field"><label>Plaza <span style="text-transform:none;font-weight:400">— define resorte y cabecera</span></label><select onchange="updCrearColchon('plaza',this.value)">
+      ${cc.plaza?'':'<option value="" selected>— elige —</option>'}
+      ${Object.entries(NOMBRE_PLAZA).map(([k,l])=>`<option value="${k}" ${cc.plaza===k?'selected':''}>${l}</option>`).join('')}
+    </select></div>`;
+
+  // La plaza solo entra al costo si hay resorte o cabeceras.
+  if((r.base==='resorte'||r.cabeceras)&&cc.ancho>0&&cc.plaza&&plazaSugerida(cc.ancho)!==cc.plaza){
+    html+=`<div style="background:#fef3c7;border-radius:6px;padding:8px 10px;font-size:11px;margin-top:8px">
+      ⚠️ Para ${cc.ancho} cm de ancho lo normal sería <strong>${NOMBRE_PLAZA[plazaSugerida(cc.ancho)]}</strong>, y tienes ${NOMBRE_PLAZA[cc.plaza]}. El resorte y las cabeceras se están cobrando a ${NOMBRE_PLAZA[cc.plaza]}.
+      <button class="btn btn-sec" style="width:100%;margin-top:6px;font-size:11px" onclick="updCrearColchon('plaza','${plazaSugerida(cc.ancho)}')">Cambiar a ${NOMBRE_PLAZA[plazaSugerida(cc.ancho)]}</button>
+    </div>`;
+  }
+  html+=`</div>
+
+  <div class="card">
+    <h4 style="margin-bottom:2px">🧱 Composición</h4>
+    <div class="muted" style="font-size:11px">Las capas van de arriba hacia abajo, como quedan en el colchón.</div>
+    ${editorCapas('crear',r,cc.ancho>0&&cc.largo>0?tam:null)}
+    ${editorTerminaciones('crear',r)}
   </div>`;
 
-  if(cc.ancho>0&&cc.largo>0){
-    const r=calcularCosto(cc.modelo,{ancho:cc.ancho,largo:cc.largo,plaza:cc.plaza});
-    const costo=Math.round(r.total);
-    const sugMay=precioSugeridoDesdeCosto(costo,margenes.may);
-    const sugMin=precioSugeridoDesdeCosto(costo,margenes.min);
-    const nombreDefault=`${MODELOS_CALC[cc.modelo]} ${cc.ancho}x${cc.largo}`;
-    html+=`<div class="card"><h4 style="margin-bottom:10px">Desglose de costo</h4>
-      <div class="tbl-wrap"><table><thead><tr><th>Concepto</th><th style="text-align:right">Neto/Incl.</th><th style="text-align:right">Total</th></tr></thead><tbody>
-      ${r.desglose.map(d=>`<tr><td>${d.lbl}${d.iva==='mas'?' <span class="muted" style="font-size:10px">+IVA</span>':''}</td><td style="text-align:right">${fmt(Math.round(d.val))}</td><td style="text-align:right"><strong>${fmt(Math.round(d.total))}</strong></td></tr>`).join('')}
-      </tbody></table></div>
-      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:12px">
-        <div class="item-row"><span>Subtotal neto (+IVA)</span><span>${fmt(Math.round(r.subtotalNetos))}</span></div>
-        <div class="item-row"><span>IVA (19%)</span><span>${fmt(Math.round(r.ivaCalc))}</span></div>
-        <div class="item-row"><span>Subtotal ya con IVA incluido</span><span>${fmt(Math.round(r.subtotalIncl))}</span></div>
-        <div class="item-row" style="border-bottom:none"><span><strong>Costo total de fabricación</strong></span><span><strong>${fmt(costo)}</strong></span></div>
-      </div>
-    </div>
-    <div class="card">
-      <div class="row">
-        <div class="stat"><div class="stat-lbl">Sugerido mayorista (${margenes.may}%)</div><div class="stat-val" style="color:var(--gold)">${fmt(sugMay)}</div></div>
-        <div class="stat"><div class="stat-lbl">Sugerido minorista (${margenes.min}%)</div><div class="stat-val" style="color:#1e40af">${fmt(sugMin)}</div></div>
-      </div>
-      <div class="field" style="margin-top:10px"><label>Nombre del producto</label><input type="text" id="cc-nombre" value="${(cc.nombre||nombreDefault).replace(/"/g,'&quot;')}" onchange="updCrearColchon('nombre',this.value)" placeholder="${nombreDefault}"></div>
-      <button class="btn" style="width:100%;margin-top:8px;background:#166534" onclick="crearProductoDesdeCalculadora()">➕ Crear como producto nuevo en el inventario</button>
-    </div>`;
-  }else{
-    html+='<div class="empty">Ingresa ancho y largo para calcular el costo.</div>';
+  // Lo que falta para poder costear, dicho en orden y una cosa a la vez: mostrar un desglose
+  // a medio llenar daría un costo que parece real y no lo es.
+  const falta=[];
+  if(!(cc.ancho>0&&cc.largo>0))falta.push('la medida (ancho y largo)');
+  if(!r.base)falta.push('la base: espuma sólida o resorte');
+  if(r.base==='espuma'&&!r.capas.some(c=>c.cm>0))falta.push('al menos una capa de espuma con espesor');
+  if((r.base==='resorte'||r.cabeceras)&&!cc.plaza)falta.push('la plaza (define el resorte y la cabecera)');
+  if(falta.length){
+    return html+`<div class="empty">Para calcular el costo falta ${falta.length===1?falta[0]:'<ul style="text-align:left;margin:8px 0 0;padding-left:18px">'+falta.map(f=>`<li>${f}</li>`).join('')+'</ul>'}</div>`;
   }
+
+  const res=calcularCosto('aMedida',tam,r);
+  const costo=Math.round(res.total);
+  const sugMay=precioSugeridoDesdeCosto(costo,margenes.may);
+  const sugMin=precioSugeridoDesdeCosto(costo,margenes.min);
+  const nombreDefault=nombreDefaultCrear();
+  const nombreValor=cc.nombreTocado?cc.nombre:nombreDefault;
+
+  html+=`<div class="card"><h4 style="margin-bottom:10px">Desglose de costo</h4>
+    <div class="tbl-wrap"><table><thead><tr><th>Concepto</th><th style="text-align:right">Neto/Incl.</th><th style="text-align:right">Total</th></tr></thead><tbody>
+    ${res.desglose.map(d=>`<tr><td>${d.lbl} <span class="muted" style="font-size:10px">${d.iva==='mas'?'+IVA':'c/IVA'}</span></td><td style="text-align:right">${fmt(Math.round(d.val))}</td><td style="text-align:right"><strong>${fmt(Math.round(d.total))}</strong></td></tr>`).join('')}
+    </tbody></table></div>
+    <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:12px">
+      <div class="item-row"><span>Subtotal neto (+IVA)</span><span>${fmt(Math.round(res.subtotalNetos))}</span></div>
+      <div class="item-row"><span>IVA (19%)</span><span>${fmt(Math.round(res.ivaCalc))}</span></div>
+      <div class="item-row"><span>Subtotal ya con IVA incluido</span><span>${fmt(Math.round(res.subtotalIncl))}</span></div>
+      <div class="item-row" style="border-bottom:none"><span><strong>Costo total de fabricación</strong></span><span><strong>${fmt(costo)}</strong></span></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="row">
+      <div class="stat"><div class="stat-lbl">Sugerido mayorista (${margenes.may}%)</div><div class="stat-val" style="color:var(--gold)">${fmt(sugMay)}</div></div>
+      <div class="stat"><div class="stat-lbl">Sugerido minorista (${margenes.min}%)</div><div class="stat-val" style="color:#1e40af">${fmt(sugMin)}</div></div>
+    </div>
+    <div class="field" style="margin-top:10px"><label>Nombre del producto</label><input type="text" id="cc-nombre" value="${escHtml(nombreValor)}" onchange="updCrearColchon('nombre',this.value)" placeholder="${escHtml(nombreDefault)}"></div>
+    <button class="btn" style="width:100%;margin-top:8px;background:#166534" onclick="crearProductoDesdeCalculadora()">➕ Crear como producto nuevo en el inventario</button>
+    <div class="muted" style="font-size:11px;margin-top:6px">${eq
+      ? `Esta composición es igual a la de <strong>${escHtml(nombreModelo(eq))}</strong>, así que el producto va a seguir a ese modelo: si lo editas en Recetas, el costo de este colchón se actualiza también.`
+      : 'Como esta composición no es la de ningún modelo, el colchón se lleva su propia receta y se recalcula solo cuando cambien los insumos.'}</div>
+  </div>
+
+  <div class="card">
+    <h4 style="margin-bottom:2px">💾 Guardar como modelo</h4>
+    <div class="muted" style="font-size:11px;margin-bottom:10px">Queda junto a Soft, Infinity Soft e Infinity Plus: aparece en Recetas para editarlo y en Costos y márgenes con el costo de cada tamaño.</div>`;
+  if(eq){
+    html+=`<div class="empty" style="padding:10px">Esta composición ya existe como modelo: <strong>${escHtml(nombreModelo(eq))}</strong>.</div>`;
+  }else{
+    html+=`<div class="field"><label>Nombre del modelo</label><input type="text" value="${escHtml(cc.nombreModelo||'')}" onchange="updCrearColchon('nombreModelo',this.value)" placeholder="Ej: Infinity Extra"></div>
+    <button class="btn btn-sec" style="width:100%;margin-top:8px" onclick="guardarComoModelo()">💾 Guardar esta composición como modelo</button>`;
+  }
+  html+='</div>';
   return html;
 }
+async function guardarComoModelo(){
+  const cc=estadoCrear();
+  const nombre=(cc.nombreModelo||'').trim();
+  if(!nombre){toast('Ponle un nombre al modelo primero');return;}
+  if(!cc.receta.base){toast('Elige primero si es de espuma o de resorte');return;}
+  const repetido=Object.entries(modelosCalcTodos()).find(([,n])=>n.trim().toLowerCase()===nombre.toLowerCase());
+  if(repetido){toast(`Ya hay un modelo llamado "${repetido[1]}"`);return;}
+  if(!(await confirmDialog(`¿Guardar "${nombre}" como modelo nuevo? Va a aparecer en Recetas y en Costos y márgenes.`)))return;
+  const key='m'+uid();
+  modelosCustom[key]={nombre,receta:JSON.parse(JSON.stringify(cc.receta))};
+  guardarConfigCalculadora();
+  cc.nombreModelo='';
+  toast('✅ Modelo guardado. Lo editas en Recetas.');
+  renderCalculadora();
+}
 async function crearProductoDesdeCalculadora(){
-  const cc=window._crearColchon;
-  if(!cc||!(cc.ancho>0)||!(cc.largo>0)){alert('Ingresa ancho y largo primero');return;}
-  const nombre=(cc.nombre||`${MODELOS_CALC[cc.modelo]} ${cc.ancho}x${cc.largo}`).trim();
+  const cc=estadoCrear();
+  if(!(cc.ancho>0)||!(cc.largo>0)){toast('Ingresa ancho y largo primero');return;}
+  if(!cc.receta.base){toast('Elige primero si es de espuma o de resorte');return;}
+  const nombre=((cc.nombreTocado?cc.nombre:'')||nombreDefaultCrear()).trim();
   // Evita duplicar el mismo colchón por darle dos veces al botón
   const yaExiste=inventario.find(p=>(p.nombre||'').trim().toLowerCase()===nombre.toLowerCase());
   if(yaExiste){
-    alert(`Ya existe un producto llamado "${yaExiste.nombre}" en el inventario. Cámbiale el nombre o edita el que ya tienes.`);
+    toast(`Ya existe "${yaExiste.nombre}" en el inventario. Cámbiale el nombre.`);
     return;
   }
   if(!(await confirmDialog(`¿Crear "${nombre}" como producto nuevo en el inventario?`)))return;
-  const r=calcularCosto(cc.modelo,{ancho:cc.ancho,largo:cc.largo,plaza:cc.plaza});
-  const costo=Math.round(r.total);
+  const tam={ancho:cc.ancho,largo:cc.largo,plaza:cc.plaza};
+  const costo=Math.round(calcularCosto('aMedida',tam,cc.receta).total);
   const margenMin=margenes.min||0,margenMay=margenes.may||0;
+  const eq=modeloEquivalente(cc.receta);
+  const alto=cc.receta.capas.reduce((a,c)=>a+(+c.cm||0),0);
   const nuevo={
     id:uid(),nombre,marca:'DreamRest',cat:'Colchón',
     may:precioSugeridoDesdeCosto(costo,margenMay),
     min:precioSugeridoDesdeCosto(costo,margenMin),
     costo,stock:0,minStock:2,
-    // Guardar la receta usada permite recalcular su costo cuando cambien los insumos,
-    // igual que los 19 colchones estándar.
-    calc:{modelo:cc.modelo,ancho:cc.ancho,largo:cc.largo,plaza:cc.plaza},
-    notas:`Creado en Crear colchón (${MODELOS_CALC[cc.modelo]}, ${cc.ancho}×${cc.largo} cm)`
+    // Con la receta guardada el costo se sigue recalculando cuando cambien los insumos, igual
+    // que los 19 estándar. Si la composición es la de un modelo, se cuelga del modelo.
+    calc:eq
+      ? {modelo:eq,ancho:cc.ancho,largo:cc.largo,plaza:cc.plaza}
+      : {modelo:'aMedida',ancho:cc.ancho,largo:cc.largo,plaza:cc.plaza,receta:JSON.parse(JSON.stringify(cc.receta))},
+    notas:`Creado en Crear colchón · ${cc.receta.base==='resorte'?'resortado':'espuma'}, ${cc.receta.capas.length} capa${cc.receta.capas.length!==1?'s':''}, ${Math.round(alto*10)/10} cm · ${cc.ancho}×${cc.largo} cm`
   };
   inventario.push(nuevo);
   await saveProdDB(nuevo);
   toast('✅ Producto creado. Edítalo en Inventario para la foto y el stock.');
-  window._crearColchon.nombre='';
+  cc.nombre='';cc.nombreTocado=false;
   renderCalculadora();
 }
 
@@ -5575,7 +6043,7 @@ function renderCostearEspuma(){
   let html=`<div class="help">Calculadora suelta: cuesta una lámina o bloque de espuma por su densidad y medidas, sin tener que armar un colchón completo.</div>
   <div class="card">
     <div class="field"><label>Densidad</label><select onchange="updCostearEspuma('densKey',this.value)">
-      ${Object.keys(insumos.espuma).map(k=>`<option value="${k}" ${ce.densKey===k?'selected':''}>${k} ($${fmt2(precioEspumaM3(k))}/m³)</option>`).join('')}
+      ${opcionesDensidad(ce.densKey)}
     </select></div>
     <div class="row3">
       <div class="field"><label>Ancho (cm)</label><input type="number" value="${ce.ancho}" onchange="updCostearEspuma('ancho',this.value)"></div>
@@ -5618,12 +6086,18 @@ function colchonesCosteables(){
     }
   }
   inventario.forEach(p=>{
-    if(!p.calc||!p.calc.modelo||!recetas[p.calc.modelo])return;
+    if(!p.calc)return;
+    // Antes se exigía que el modelo estuviera en `recetas`, así que un colchón armado a
+    // medida (que lleva su propia receta) quedaba fuera de todas las actualizaciones.
+    const receta=recetaDeProducto(p.calc);
+    if(!receta)return;
     if(lista.some(x=>String(x.prod.id)===String(p.id)))return;
-    lista.push({prod:p,modelo:p.calc.modelo,tam:{ancho:p.calc.ancho,largo:p.calc.largo,plaza:p.calc.plaza,key:`${p.calc.ancho}x${p.calc.largo}`},aMedida:true});
+    lista.push({prod:p,modelo:p.calc.modelo,receta,tam:{ancho:p.calc.ancho,largo:p.calc.largo,plaza:p.calc.plaza,key:`${p.calc.ancho}x${p.calc.largo}`},aMedida:true});
   });
   return lista;
 }
+// Todas las pantallas costean un item de la lista igual: con su receta si la trae.
+function costoDeItem(it){return calcularCosto(it.modelo,it.tam,it.receta)}
 
 // Tabla de previsualización: qué cambia, de cuánto a cuánto. Solo filas que cambian.
 function tablaPrevisualizacion(cambios,columnas){
@@ -5654,8 +6128,8 @@ function celdaCambio(antes,despues){
 async function aplicarCostosInventario(){
   const items=colchonesCosteables();
   const cambios=[];
-  items.forEach(({prod,modelo,tam,aMedida})=>{
-    const nuevo=Math.round(calcularCosto(modelo,tam).total);
+  items.forEach(({prod,aMedida,...it})=>{
+    const nuevo=Math.round(costoDeItem(it).total);
     const antes=prod.costo!=null?Math.round(prod.costo):null;
     if(antes===nuevo)return;
     cambios.push({prod,nuevo,nombre:prod.nombre,aMedida,celdas:[celdaCambio(antes,nuevo)]});
@@ -5685,8 +6159,8 @@ async function aplicarCostosInventario(){
 // Devuelve solo los colchones cuyo precio sugerido difiere del que tienen cargado.
 function calcularCambiosPrecios(){
   const cambios=[];
-  colchonesCosteables().forEach(({prod,modelo,tam,aMedida})=>{
-    const costo=calcularCosto(modelo,tam).total;
+  colchonesCosteables().forEach(({prod,aMedida,...it})=>{
+    const costo=costoDeItem(it).total;
     const may=precioSugeridoDesdeCosto(costo,margenes.may);
     const min=precioSugeridoDesdeCosto(costo,margenes.min);
     if(prod.may===may&&prod.min===min)return;
@@ -9105,8 +9579,9 @@ Object.assign(window,{
   abrirEmpleado,eliminarEmpleado,registrarEventoRRHH,eliminarEventoRRHH,
   renderPersonal,faltaRapida,atrasoRapido,toggleActivoEmpleado,
   renderCalculadora,updInsumoCalc,aplicarCostosInventario,aplicarPreciosSugeridos,guardarConfigCalculadora,restaurarInsumosDefault,
-  updRecetaCalc,restaurarRecetasDefault,eliminarHistorialCalc,setMargen,toggleAutoPrecios,
-  updCrearColchon,crearProductoDesdeCalculadora,updCostearEspuma,
+  restaurarRecetasDefault,eliminarHistorialCalc,setMargen,toggleAutoPrecios,
+  capaSet,capaAdd,capaDel,capaMover,recetaSet,eliminarModeloCustom,setIvaInsumo,
+  updCrearColchon,plantillaCrear,limpiarCrearColchon,guardarComoModelo,crearProductoDesdeCalculadora,updCostearEspuma,
   handleFotoCompra,calcSugerenciaCompra,verFotoCompra,
   handleFotoProd,quitarFotoProd,soltarFotoProd,pegarFotoProd,verFotoProdVenta,generarCatalogoPDF,generarCatalogoPropio,compartirCatalogoWhatsApp,toggleCamposColchon,
   abrirReposicion,renderReposicion,copiarListaReposicion,exportReposicion,
