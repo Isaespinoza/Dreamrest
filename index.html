@@ -4899,12 +4899,13 @@ const INSUMOS_DEFAULT={
   telaRollo:1350,
   telaAnchoUtil:135,
   fajaMargen:10,
-  tiraSoft:21,
-  tiraIS:23,
-  tiraIP:32,
-  fajasSoft:5,
-  fajasIS:5,
-  fajasIP:4,
+  // El ancho de la tira ya no es una constante por modelo: sale del alto real del colchón más
+  // este margen de costura, y de ahí cuántas tiras salen a lo ancho del rollo. Con 5 cm los
+  // tres modelos dan las mismas fajas por corte que se venían usando a mano (5, 5 y 4).
+  fajaMargenAlto:5,
+  // Lo que el resorte le aporta al alto del colchón. No se usa para costear el resorte (ese
+  // va por unidad segun la plaza), sino para saber cuanta tira de faja hay que cortar.
+  resorteAlto:15,
   // Cinta y pegamento
   cintaM:62,
   cintaMargen:10,
@@ -5104,14 +5105,29 @@ function costoCabeceras(plaza,largoCm,densKey){
 // Las capas van de arriba hacia abajo. "perfil" decide el ancho de tira, cuántas fajas salen
 // por corte y las vueltas de cinta; se guarda como clave (no como número) para que siga
 // dependiendo de lo que haya en Insumos.
+// El perfil solo decide cuántas vueltas de cinta lleva. El ancho de la tira y las fajas por
+// corte se calculan (ver datosFaja): antes eran constantes por modelo, así que un colchón a
+// medida de 30 cm pagaba la faja de un modelo de 25 y salía corto.
 const PERFILES_FAJA={
-  soft:{nom:'Soft (tira angosta)',tira:'tiraSoft',fajas:'fajasSoft',vueltas:'cintaVueltasSoft'},
-  infinitySoft:{nom:'Infinity Soft (tira media)',tira:'tiraIS',fajas:'fajasIS',vueltas:'cintaVueltasSoft'},
-  infinityPlus:{nom:'Infinity Plus (tira alta)',tira:'tiraIP',fajas:'fajasIP',vueltas:'cintaVueltasIP'}
+  soft:{nom:'Soft (2 vueltas de cinta)',vueltas:'cintaVueltasSoft'},
+  infinitySoft:{nom:'Infinity Soft (2 vueltas)',vueltas:'cintaVueltasSoft'},
+  infinityPlus:{nom:'Infinity Plus (3 vueltas)',vueltas:'cintaVueltasIP'}
 };
-function datosPerfil(perfil){
-  const p=PERFILES_FAJA[perfil]||PERFILES_FAJA.soft;
-  return {tiraAncho:insumos[p.tira]||0,fajasPorCorte:insumos[p.fajas]||1,vueltas:insumos[p.vueltas]||0};
+
+// Alto total del colchón: lo que se ve de lado. Es lo que manda para cortar la faja.
+function altoColchon(r){
+  const capas=(r.capas||[]).reduce((a,c)=>a+(+c.cm||0),0);
+  return capas+(r.base==='resorte'?(insumos.resorteAlto||0):0);
+}
+// Faja: la tira de tela que rodea el colchón. Su ancho sale del alto real más el margen de
+// costura, y de ese ancho sale cuántas tiras salen a lo ancho del rollo — que es lo que
+// realmente mueve el costo, porque la faja se cobra como un corte dividido entre esas tiras.
+function datosFaja(r){
+  const alto=altoColchon(r);
+  const tiraAncho=alto+(insumos.fajaMargenAlto||0);
+  const fajasPorCorte=Math.max(1,Math.floor((insumos.telaAnchoUtil||0)/Math.max(1,tiraAncho)));
+  const p=PERFILES_FAJA[r.perfil]||PERFILES_FAJA.soft;
+  return {alto,tiraAncho,fajasPorCorte,vueltas:insumos[p.vueltas]||0};
 }
 
 // Convierte una receta vieja (bloqueD/arrD/abjD) a la forma canónica. Las recetas que ya
@@ -5233,10 +5249,10 @@ function calcularCosto(modelo,tam,recetaOverride){
   // Faja
   const perimetroM=2*(anchoM+largoM);
   const largoCorteM=perimetroM+(insumos.fajaMargen/100);
-  const perfil=datosPerfil(r.perfil);
+  const perfil=datosFaja(r);
   const tiraAncho=perfil.tiraAncho,fajasPorCorte=perfil.fajasPorCorte||1;
   const cFaja=(largoCorteM*insumos.telaRollo)/fajasPorCorte;
-  desglose.push({lbl:`Faja tela (tira ${tiraAncho}cm, ${largoCorteM.toFixed(2)}m × $${fmt2(insumos.telaRollo)} ÷ ${fajasPorCorte})`,val:cFaja,iva:ivaDe('telaRollo')});
+  desglose.push({lbl:`Faja tela (tira ${tiraAncho}cm para ${perfil.alto}cm de alto, ${largoCorteM.toFixed(2)}m × $${fmt2(insumos.telaRollo)} ÷ ${fajasPorCorte})`,val:cFaja,iva:ivaDe('telaRollo')});
 
   // Cinta
   const vueltasCinta=perfil.vueltas;
@@ -5330,7 +5346,9 @@ const NOMBRE_INSUMO={
   moArmado:'Mano de obra armado',moCostura:'Mano de obra costura',
   telaRollo:'Rollo tela faja',cintaM:'Cinta (m)',pegamento:'Pegamento',bolsa:'Bolsa',
   mermaEspumaPct:'Merma de espuma (%)',gastoIndirecto:'Gasto indirecto por colchón',
-  tapasRecargo:'Recargo tapas (%)'
+  tapasRecargo:'Recargo tapas (%)',
+  resorteAlto:'Alto del resorte (cm)',fajaMargenAlto:'Margen de costura de la faja (cm)',
+  telaAnchoUtil:'Ancho útil del rollo (cm)'
 };
 function nombreInsumo(path){
   if(NOMBRE_INSUMO[path])return NOMBRE_INSUMO[path];
@@ -5342,8 +5360,10 @@ function nombreInsumo(path){
 }
 // Algunos "insumos" son porcentajes o medidas, no pesos: mostrarlos con $ confunde.
 const INSUMOS_PORCENTAJE=['mermaEspumaPct','tapasRecargo','fajaMargen','cintaMargen'];
+const INSUMOS_CM=['resorteAlto','fajaMargenAlto','telaAnchoUtil'];
 function fmtValorInsumo(campo,valor){
   if(INSUMOS_PORCENTAJE.includes(campo))return (Math.round((valor||0)*10)/10)+'%';
+  if(INSUMOS_CM.includes(campo))return (Math.round((valor||0)*10)/10)+' cm';
   return fmt(Math.round(valor||0));
 }
 async function registrarHistorialCalc(entrada){
@@ -5472,6 +5492,24 @@ function renderCalculadora(){
     html+=`<div class="card"><h4 style="margin-bottom:10px">🧵 Otros insumos</h4><div class="row3">
       ${otros.map(([k,l])=>`<div class="field"><label>${l}</label><input type="number" value="${insumos[k]}" onchange="updInsumoCalc('${k}',this.value)">${ivaSelect(k)}</div>`).join('')}
     </div></div>`;
+    // Faja: de acá sale el ancho de la tira y cuántas salen por corte, para todos los colchones.
+    html+=`<div class="card"><h4 style="margin-bottom:4px">🧵 Faja de tela</h4>
+      <div class="muted" style="font-size:11px;margin-bottom:10px">El ancho de la tira sale del alto de cada colchón: capas + resorte + el margen de costura. Con eso se calcula cuántas tiras salen a lo ancho del rollo, que es lo que define el costo de la faja.</div>
+      <div class="row3">
+        <div class="field"><label>Alto del resorte (cm)</label><input type="number" step="0.5" min="0" value="${insumos.resorteAlto||0}" onchange="updInsumoCalc('resorteAlto',this.value)"></div>
+        <div class="field"><label>Margen de costura (cm)</label><input type="number" step="0.5" min="0" value="${insumos.fajaMargenAlto||0}" onchange="updInsumoCalc('fajaMargenAlto',this.value)"></div>
+        <div class="field"><label>Ancho útil del rollo (cm)</label><input type="number" step="1" min="1" value="${insumos.telaAnchoUtil||0}" onchange="updInsumoCalc('telaAnchoUtil',this.value)"></div>
+      </div>
+      <div class="tbl-wrap" style="margin-top:10px"><table>
+        <thead><tr><th>Colchón</th><th style="text-align:right">Alto</th><th style="text-align:right">Tira</th><th style="text-align:right">Fajas por corte</th></tr></thead><tbody>
+        ${Object.entries(modelosCalcTodos()).map(([k,nom])=>{
+          const r=recetaDeModelo(k);if(!r)return '';
+          const f=datosFaja(normalizarReceta(r,k));
+          return `<tr><td>${escHtml(nom)}</td><td style="text-align:right">${Math.round(f.alto*10)/10} cm</td><td style="text-align:right">${Math.round(f.tiraAncho*10)/10} cm</td><td style="text-align:right"><strong>${f.fajasPorCorte}</strong></td></tr>`;
+        }).join('')}
+      </tbody></table></div>
+      <div class="muted" style="font-size:11px;margin-top:8px">Ojo con el margen: subirlo un centímetro puede hacer que del rollo salga una tira menos y que la faja de todos los colchones suba de golpe.</div>
+    </div>`;
     // Merma y gastos indirectos
     html+=`<div class="card"><h4 style="margin-bottom:4px">📉 Merma y gastos indirectos</h4>
       <div class="muted" style="font-size:11px;margin-bottom:10px">La espuma que se pierde al cortar igual la pagaste, y el arriendo o la luz no aparecen en ningún insumo. Ponlos aquí y se reparten en el costo de cada colchón. En 0 no afectan nada.</div>
@@ -5690,12 +5728,25 @@ function editorTerminaciones(destino,r){
     </div>
     <div class="row">
       <div class="field"><label>Costuras</label><input type="number" step="1" min="0" value="${r.costuras}" onchange="recetaSet('${destino}','costuras',this.value)"></div>
-      <div class="field"><label>Perfil de faja y cinta</label><select onchange="recetaSet('${destino}','perfil',this.value)">
+      <div class="field"><label>Vueltas de cinta</label><select onchange="recetaSet('${destino}','perfil',this.value)">
         ${Object.entries(PERFILES_FAJA).map(([k,p])=>`<option value="${k}" ${r.perfil===k?'selected':''}>${p.nom}</option>`).join('')}
       </select></div>
     </div>
-    <div class="muted" style="font-size:11px;margin-top:6px">Perfil: tira de ${datosPerfil(r.perfil).tiraAncho} cm, ${datosPerfil(r.perfil).fajasPorCorte} fajas por corte y ${datosPerfil(r.perfil).vueltas} vueltas de cinta. La tapa jacquard de abajo va siempre, y se cobra según el ancho.</div>
+    ${resumenFaja(r)}
+    <div class="muted" style="font-size:11px;margin-top:6px">La tapa jacquard de abajo va siempre, y se cobra según el ancho.</div>
     ${editorPiezasCortadas(destino,r)}`;
+}
+// La faja ya no se elige: se muestra de dónde salió, para que se note al tiro si el alto
+// quedó raro o si por un centímetro se perdió una tira del rollo.
+function resumenFaja(r){
+  const f=datosFaja(r);
+  const capas=(r.capas||[]).reduce((a,c)=>a+(+c.cm||0),0);
+  const desdeResorte=r.base==='resorte'?(insumos.resorteAlto||0):0;
+  return `<div style="background:var(--bg2,#faf9f7);border-radius:6px;padding:9px 11px;margin-top:10px;font-size:11px;line-height:1.7">
+    <strong>Faja calculada sola</strong><br>
+    Alto del colchón <strong>${Math.round(f.alto*10)/10} cm</strong> = ${Math.round(capas*10)/10} de capas${desdeResorte?` + ${desdeResorte} del resorte`:''}.<br>
+    Tira de <strong>${Math.round(f.tiraAncho*10)/10} cm</strong> (alto + ${insumos.fajaMargenAlto||0} de costura) → salen <strong>${f.fajasPorCorte}</strong> por corte del rollo de ${insumos.telaAnchoUtil||0} cm.
+  </div>`;
 }
 // Lingotes y cabeceras: las dos piezas que se piden cortadas a medida. Antes iban solas con
 // todo lo resortado y siempre en D21 cortes; ahora se ponen o se quitan y cada una elige su
