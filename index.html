@@ -2938,6 +2938,7 @@ function renderCotizaciones(){
     <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">
       <button class="btn btn-sec btn-sm" onclick="imprimirCotizacion('${c.id}')">🖨️ Imprimir</button>
       <button class="btn btn-sec btn-sm" onclick="imprimirCotizacion('${c.id}',true)" title="Valores sin IVA, con el 19% detallado aparte">🧾 Neto + IVA</button>
+      <button class="btn btn-sec btn-sm" onclick="waCotizacion('${c.id}')" style="border-color:#25d366;color:#128c3e">📱 WhatsApp</button>
       <button class="btn btn-sec btn-sm" onclick="editarCotizacion('${c.id}')">✏️ Editar</button>
       ${!c.convertida?`<button class="btn btn-sm" style="background:#166534" onclick="convertirEnVenta('${c.id}')">✅ Convertir en venta</button>`:''}
       <button class="btn btn-danger btn-sm" onclick="eliminarCotizacion('${c.id}')">🗑️</button>
@@ -7284,6 +7285,27 @@ function waPedido(id){
   abrirWa(v.tel,msg);
 }
 
+function waCotizacion(id){
+  const c=cotizaciones.find(x=>String(x.id)===String(id));if(!c)return;
+  const fechaFmt=c.fecha.split('-').reverse().join('/');
+  let msg=`Hola ${c.cliente} 👋, te escribimos de DreamRest con la cotización que nos pediste (${fechaFmt}):\n\n`;
+  c.items.forEach(it=>{
+    const nom=it.desc||((inventario.find(p=>p.id===it.prodId)||{}).nombre)||'Producto';
+    msg+=`• ${nom} x${it.qty} — ${fmt(it.qty*it.precio)}\n`;
+  });
+  if(c.descuento>0)msg+=`Descuento aplicado: -${fmt(c.descuento)}\n`;
+  if((c.descuentoCupon||0)>0)msg+=`Cupón ${((c.cupon||{}).codigo||'')}: -${fmt(c.descuentoCupon)}\n`;
+  msg+=`\n*Total: ${fmt(c.total)}*\n`;
+  if(c.desp>0){
+    const dir=[c.despCalle,c.despNumero,c.despComuna].filter(Boolean).join(', ')||c.dir||'';
+    msg+=`\n🚚 Despacho${dir?` a ${dir}`:''}: ${fmt(c.desp)}. Se cancela en efectivo directamente al chofer del camión (servicio externo, no facturado por DreamRest).\n`;
+  }
+  msg+=`\nCotización válida por 7 días. Precios sujetos a disponibilidad de stock.\n\n¿La dejamos reservada? 😊 DreamRest`;
+  // A diferencia de una venta, una cotización puede no traer teléfono guardado: en ese
+  // caso se abre WhatsApp igual, sin destinatario, para elegir el contacto a mano.
+  window.open('https://wa.me/'+telWa(c.tel)+'?text='+encodeURIComponent(msg),'_blank');
+}
+
 // Cambio de estado rápido desde la tarjeta (sin abrir el detalle)
 async function cambiarEstadoRapido(id,nuevo){
   const v=ventas.find(x=>String(x.id)===String(id));
@@ -9708,7 +9730,7 @@ Object.assign(window,{
   limpiarFiltrosVentas,cambiarEstado,cambiarEstadoDetalle,registrarAbono,resetearInventario,
   editarAbono,borrarAbono,abrirRegistroAbonos,renderRegistroAbonos,
   renderSaldos,abonarSaldo,pagarTotalSaldo,refrescarVistaActiva,actualizarBadges,
-  cambiarEstadoRapido,waWhatsApp,waCobro,waDespacho,waPedido,
+  cambiarEstadoRapido,waCotizacion,waWhatsApp,waCobro,waDespacho,waPedido,
   iniciarTour,tourSiguiente,tourAnterior,cerrarTour,exportarRespaldo,
   abrirRecompra,renderRecompra,marcarRecompraContactada,waRecompra,
   guardarMetaVendedor,
