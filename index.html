@@ -6029,6 +6029,27 @@ function ivaSelect(k){
     <option value="incl" ${v==='incl'?'selected':''}>IVA incluido</option>
   </select>`;
 }
+// Botones "+ IVA / IVA incluido" para un insumo. Mismo efecto que el selector de Insumos.
+function ivaBotones(k){
+  const v=ivaDe(k);
+  const b=(val,l)=>`<button class="btn ${v===val?'':'btn-sec'}" style="flex:1;font-size:12px;padding:6px" onclick="setIvaInsumo('${k}','${val}')">${l}</button>`;
+  return `<div style="display:flex;gap:6px">${b('mas','+ IVA 19%')}${b('incl','IVA incluido')}</div>`;
+}
+// Tarjeta del resorte en Crear colchón: precio de la plaza elegida y su criterio de IVA.
+function editorResorteCrear(plaza){
+  const k={'1pl':'r1pl','15pl':'r15pl','2pl':'r2pl','king':'rking'}[plaza];
+  if(!k)return '';
+  const precio=insumos.resortes[k]||0;
+  const mas=ivaDe('resortes')==='mas';
+  return `<div class="card">
+    <h4 style="margin-bottom:2px">🌀 Resorte ${NOMBRE_PLAZA[plaza]}</h4>
+    <div class="muted" style="font-size:11px;margin-bottom:10px">Es el precio de la lista de Insumos: si lo cambias acá, también cambia el costo de los modelos de catálogo con resorte.</div>
+    <div class="field"><label>Precio por unidad ($)</label><input type="number" min="0" value="${precio}" onchange="updInsumoCalc('resortes.${k}',this.value)"></div>
+    <label style="display:block;margin:8px 0 6px">Este precio es</label>
+    ${ivaBotones('resortes')}
+    <div class="muted" style="font-size:11px;margin-top:8px">${mas?`Neto ${fmt(precio)} + IVA = <strong>${fmt(Math.round(precio*1.19))}</strong> con IVA.`:`Con IVA incluido: <strong>${fmt(precio)}</strong> (neto ${fmt(Math.round(precio/1.19))}).`} El IVA que elijas vale para los resortes de todas las plazas.</div>
+  </div>`;
+}
 // Versión en línea, para las tarjetas donde el criterio vale para todo un grupo de precios.
 function ivaSelectGrupo(k,texto){
   const v=ivaDe(k);
@@ -6662,6 +6683,10 @@ function renderCrearColchon(){
     ${editorCapas('crear',r,cc.ancho>0&&cc.largo>0?tam:null)}
     ${editorTerminaciones('crear',r)}
   </div>`;
+
+  // El resorte se revisa acá mismo, sin ir a Insumos: es el precio de la lista de insumos, así
+  // que editarlo mueve también el costo de los modelos resortados de catálogo.
+  if(r.base==='resorte'&&cc.plaza)html+=editorResorteCrear(cc.plaza);
 
   // Lo que falta para poder costear, dicho en orden y una cosa a la vez: mostrar un desglose
   // a medio llenar daría un costo que parece real y no lo es.
