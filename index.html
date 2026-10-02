@@ -885,7 +885,7 @@ tbody tr:hover{background:var(--gold-bg)}
     </div>
     <div class="field" style="position:relative">
       <label>Cliente</label>
-      <input type="text" id="vt-cliente" oninput="autocompleteCliente('vt-cliente','vt-ac')" autocomplete="off">
+      <input type="text" id="vt-cliente" oninput="autocompleteClienteDeb('vt-cliente','vt-ac')" autocomplete="off">
       <div id="vt-ac" class="cliente-ac" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--white);border:1px solid var(--border);color:var(--text);border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.1);z-index:1100;max-height:160px;overflow-y:auto"></div>
     </div>
     <div class="row" id="vt-rut-row" style="display:none">
@@ -980,7 +980,7 @@ tbody tr:hover{background:var(--gold-bg)}
     </div>
     <div class="field" style="position:relative">
       <label>Cliente</label>
-      <input type="text" id="cot-cliente" autocomplete="off" oninput="autocompleteCliente('cot-cliente','cot-cli-ac')">
+      <input type="text" id="cot-cliente" autocomplete="off" oninput="autocompleteClienteDeb('cot-cliente','cot-cli-ac')">
       <div id="cot-cli-ac" class="cliente-ac" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--white);border:1px solid var(--border);color:var(--text);border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.1);z-index:1100;max-height:160px;overflow-y:auto"></div>
     </div>
     <div class="row">
@@ -1614,6 +1614,17 @@ const today=()=>isoLocal(new Date());
 const horaActual=()=>{const d=new Date();return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');};
 function uid(){return'id'+Date.now()+Math.floor(Math.random()*1000);}
 
+// Normaliza texto para búsquedas: minúsculas y sin tildes ("sofá"/"Sofa" -> "sofa").
+const norm=s=>String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
+
+// Busca coincidencia por palabras, sin importar el orden en que se escriban:
+// "flex colchon" encuentra "Colchón Flex Titanium" aunque antes solo matcheara
+// con el texto exacto, en ese orden y sin tildes.
+const coincide=(texto,query)=>{
+  const t=norm(texto);
+  return norm(query).split(/\s+/).filter(Boolean).every(w=>t.includes(w));
+};
+
 // =========== INICIO ===========
 // =========== INICIO PERSONALIZABLE ===========
 const WIDGETS_INICIO=[
@@ -2055,7 +2066,7 @@ function renderNuevaVentaTab(){
     <div style="margin:14px 0 8px"><strong style="font-size:14px">👤 Datos del cliente</strong> <span class="muted" style="font-size:11px">(vacío = Cliente mostrador)</span></div>
     <div class="field" style="position:relative">
       <label>Cliente</label>
-      <input type="text" id="nv-cliente" placeholder="Cliente mostrador" oninput="autocompleteCliente('nv-cliente','nv-ac')" autocomplete="off">
+      <input type="text" id="nv-cliente" placeholder="Cliente mostrador" oninput="autocompleteClienteDeb('nv-cliente','nv-ac')" autocomplete="off">
       <div id="nv-ac" class="cliente-ac" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--white);border:1px solid var(--border);color:var(--text);border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.1);z-index:100;max-height:160px;overflow-y:auto"></div>
     </div>
     <div id="nv-rut-row" style="display:none">
@@ -2484,12 +2495,22 @@ function autocompleteProductoNV(i){
   const input=document.getElementById('nv-prod-input-'+i);
   const ac=document.getElementById('nv-prod-ac-'+i);
   const val=input.value.toLowerCase().trim();
-  // Guardar lo escrito como descripción manual mientras escribe
+  // Guardar lo escrito como descripción manual mientras escribe. Esto va sincrónico
+  // (no se debounce) para que guardar la venta nunca quede con un desc desactualizado.
   window._nvItems[i].desc=input.value;
   window._nvItems[i].prodId=null;
   if(!val||val.length<2){ac.style.display='none';return;}
+  // La búsqueda y el armado del dropdown (con fotos de producto) sí se debouncean:
+  // es lo pesado, y recalcularlo en cada tecla es lo que trababa el formulario.
+  renderAutocompleteProductoNVDeb(i);
+}
+function renderAutocompleteProductoNV(i){
+  const input=document.getElementById('nv-prod-input-'+i);
+  const ac=document.getElementById('nv-prod-ac-'+i);
+  const val=input.value.toLowerCase().trim();
+  if(!val||val.length<2){ac.style.display='none';return;}
   const tipo=document.getElementById('nv-tipo').value;
-  const matches=inventario.filter(p=>!(p.combo&&p.combo.colchonId)&&(p.nombre+' '+p.marca).toLowerCase().includes(val)).slice(0,8);
+  const matches=inventario.filter(p=>!(p.combo&&p.combo.colchonId)&&coincide(p.nombre+' '+p.marca+' '+(p.cat||''),val)).slice(0,8);
   if(!matches.length){ac.style.display='none';return;}
   ac.innerHTML=matches.map(p=>{
     const pc=precioConPromo(p,tipo);
@@ -2770,7 +2791,7 @@ function autocompleteCliente(inputId,acId){
   const val=document.getElementById(inputId).value.toLowerCase().trim();
   const ac=document.getElementById(acId);
   if(!val||val.length<2){ac.classList.remove('show');ac.style.display='none';return;}
-  const clientes=[...new Set(ventas.map(v=>v.cliente))].filter(c=>c.toLowerCase().includes(val)).slice(0,6);
+  const clientes=[...new Set(ventas.map(v=>v.cliente))].filter(c=>coincide(c,val)).slice(0,6);
   if(!clientes.length){ac.classList.remove('show');ac.style.display='none';return;}
   ac.innerHTML=clientes.map(c=>`<div onclick="selCliente('${inputId}','${acId}','${c.replace(/'/g,"\\'")}',event)" style="padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border);font-size:13px;transition:background .15s" onmouseover="this.style.background='var(--gold-bg)'" onmouseout="this.style.background=''">${c}</div>`).join('');
   ac.style.display='block';
@@ -3149,8 +3170,15 @@ function autocompleteCot(i){
   const val=input.value.toLowerCase().trim();
   window._cotItems[i].desc=input.value;window._cotItems[i].prodId=null;
   if(!val||val.length<2){ac.style.display='none';return;}
+  renderAutocompleteCotDeb(i);
+}
+function renderAutocompleteCot(i){
+  const input=document.getElementById('cot-prod-'+i);
+  const ac=document.getElementById('cot-ac-'+i);
+  const val=input.value.toLowerCase().trim();
+  if(!val||val.length<2){ac.style.display='none';return;}
   const tipo=document.getElementById('cot-tipo').value;
-  const matches=inventario.filter(p=>!(p.combo&&p.combo.colchonId)&&(p.nombre+' '+p.marca).toLowerCase().includes(val)).slice(0,8);
+  const matches=inventario.filter(p=>!(p.combo&&p.combo.colchonId)&&coincide(p.nombre+' '+p.marca+' '+(p.cat||''),val)).slice(0,8);
   if(!matches.length){ac.style.display='none';return;}
   ac.innerHTML=matches.map(p=>{const pc=precioConPromo(p,tipo);const precio=pc.precio;return`<div onclick="selCotProd(${i},'${p.id}',event)" style="padding:9px 11px;cursor:pointer;border-bottom:1px solid var(--border);font-size:12px" onmouseover="this.style.background='var(--gold-bg)'" onmouseout="this.style.background=''"><div style="display:flex;justify-content:space-between"><strong>${p.nombre}</strong><span style="color:#a87f3e">${fmt(precio)}</span></div><div style="color:#78716c;font-size:10px">${p.marca||''}</div></div>`;}).join('');
   ac.style.display='block';
@@ -3321,7 +3349,7 @@ function renderClientes(){
     if(v.tel)cli[v.cliente].tel=v.tel;
   });
   let lista=Object.entries(cli);
-  if(q)lista=lista.filter(([n])=>n.toLowerCase().includes(q));
+  if(q)lista=lista.filter(([n])=>coincide(n,q));
   lista.sort((a,b)=>b[1].total-a[1].total);
 
   const totalClientes=Object.keys(cli).length;
@@ -3464,7 +3492,14 @@ function autocompleteProductoHno(i){
   hnoItems[i].desc=input.value;
   hnoItems[i].prodId=null;
   if(!val||val.length<2){ac.style.display='none';return;}
-  const matches=inventario.filter(p=>!(p.combo&&p.combo.colchonId)&&(p.nombre+' '+p.marca).toLowerCase().includes(val)).slice(0,8);
+  renderAutocompleteProductoHnoDeb(i);
+}
+function renderAutocompleteProductoHno(i){
+  const input=document.getElementById('hno-prod-input-'+i);
+  const ac=document.getElementById('hno-prod-ac-'+i);
+  const val=input.value.toLowerCase().trim();
+  if(!val||val.length<2){ac.style.display='none';return;}
+  const matches=inventario.filter(p=>!(p.combo&&p.combo.colchonId)&&coincide(p.nombre+' '+p.marca+' '+(p.cat||''),val)).slice(0,8);
   if(!matches.length){ac.style.display='none';return;}
   ac.innerHTML=matches.map(p=>{
     const stock=parseInt(p.stock)||0;
@@ -3637,7 +3672,7 @@ function renderPromociones(){
       <h4 style="margin-bottom:10px">+ Agregar producto a promoción</h4>
       <div class="field" style="position:relative">
         <label>Producto</label>
-        <input type="text" id="promo-prod-input" placeholder="Escribe el producto..." autocomplete="off" oninput="autocompletePromoProd()">
+        <input type="text" id="promo-prod-input" placeholder="Escribe el producto..." autocomplete="off" oninput="autocompletePromoProdDeb()">
         <div id="promo-prod-ac" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--white);border:1px solid var(--border);color:var(--text);border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.12);z-index:100;max-height:180px;overflow-y:auto"></div>
       </div>
       <div id="promo-form" style="display:none">
@@ -3707,7 +3742,7 @@ function autocompletePromoProd(){
   const ac=document.getElementById('promo-prod-ac');
   const val=input.value.toLowerCase().trim();
   if(!val||val.length<2){ac.style.display='none';return;}
-  const matches=inventario.filter(p=>!(p.combo&&p.combo.colchonId)&&(p.nombre+' '+p.marca).toLowerCase().includes(val)).slice(0,8);
+  const matches=inventario.filter(p=>!(p.combo&&p.combo.colchonId)&&coincide(p.nombre+' '+p.marca+' '+(p.cat||''),val)).slice(0,8);
   if(!matches.length){ac.style.display='none';return;}
   ac.innerHTML=matches.map(p=>`<div onclick="selPromoProd('${p.id}',event)" style="padding:9px 11px;cursor:pointer;border-bottom:1px solid var(--border);font-size:12px" onmouseover="this.style.background='var(--gold-bg)'" onmouseout="this.style.background=''"><strong>${p.nombre}</strong> <span class="muted">· Min ${fmt(p.min)} / May ${fmt(p.may)}</span></div>`).join('');
   ac.style.display='block';
@@ -8191,7 +8226,6 @@ function prodsPerdibles(){
   return inventario.filter(p=>!p.combo&&(parseInt(p.stock)||0)>0)
     .sort((a,b)=>String(a.nombre||'').localeCompare(String(b.nombre||'')));
 }
-const normPerdida=s=>String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
 async function abrirPerdida(){
   if(!(await requiereAdmin(true)))return;
   window._perdidaCant={};
@@ -8206,9 +8240,9 @@ async function abrirPerdida(){
 function renderPerdida(){
   const cont=document.getElementById('perd-list');
   if(!cont)return;
-  const q=normPerdida(document.getElementById('perd-buscar').value);
+  const q=document.getElementById('perd-buscar').value;
   const cant=window._perdidaCant||{};
-  const lista=prodsPerdibles().filter(p=>cant[p.id]>0||!q||normPerdida(p.nombre+' '+(p.marca||'')+' '+(p.cat||'')).includes(q));
+  const lista=prodsPerdibles().filter(p=>cant[p.id]>0||!q||coincide(p.nombre+' '+(p.marca||'')+' '+(p.cat||''),q));
   cont.innerHTML=lista.length?lista.map(p=>{
     const stock=parseInt(p.stock)||0, costo=parseInt(p.costo)||0;
     return`<div class="item-row" style="gap:8px">
@@ -8537,7 +8571,7 @@ function renderInv(){
   const fm=document.getElementById('inv-marca').value;
   const fc=document.getElementById('inv-cat').value;
   let items=inventario.filter(p=>{
-    if(q&&!(p.nombre+' '+p.marca).toLowerCase().includes(q))return false;
+    if(q&&!coincide(p.nombre+' '+p.marca+' '+(p.cat||''),q))return false;
     if(fm&&p.marca!==fm)return false;
     if(fc&&p.cat!==fc)return false;
     return true;
@@ -8780,8 +8814,15 @@ function autocompleteProductoVT(i){
   ventaItems[i].desc=input.value;
   ventaItems[i].prodId=null;
   if(!val||val.length<2){ac.style.display='none';return;}
+  renderAutocompleteProductoVTDeb(i);
+}
+function renderAutocompleteProductoVT(i){
+  const input=document.getElementById('vt-prod-input-'+i);
+  const ac=document.getElementById('vt-prod-ac-'+i);
+  const val=input.value.toLowerCase().trim();
+  if(!val||val.length<2){ac.style.display='none';return;}
   const tipo=document.getElementById('vt-tipo').value;
-  const matches=inventario.filter(p=>!(p.combo&&p.combo.colchonId)&&(p.nombre+' '+p.marca).toLowerCase().includes(val)).slice(0,8);
+  const matches=inventario.filter(p=>!(p.combo&&p.combo.colchonId)&&coincide(p.nombre+' '+p.marca+' '+(p.cat||''),val)).slice(0,8);
   if(!matches.length){ac.style.display='none';return;}
   ac.innerHTML=matches.map(p=>{
     const pc=precioConPromo(p,tipo);
@@ -9696,7 +9737,7 @@ function renderVentas(){
   const hayFiltros=q||ft||fDesde||fHasta||fVend||fPago||fEstado;
 
   let items=ventas.filter(v=>{
-    if(q&&!v.cliente.toLowerCase().includes(q))return false;
+    if(q&&!coincide(v.cliente,q))return false;
     if(ft&&v.tipo!==ft)return false;
     if(fDesde&&v.fecha<fDesde)return false;
     if(fHasta&&v.fecha>fHasta)return false;
@@ -9911,7 +9952,7 @@ function renderSaldos(){
   const orden=document.getElementById('sp-orden').value||'antiguas';
 
   let items=ventas.filter(v=>(v.saldo||0)>0&&(v.estado||'pendiente')!=='cancelado');
-  if(q)items=items.filter(v=>(v.cliente||'').toLowerCase().includes(q));
+  if(q)items=items.filter(v=>coincide(v.cliente||'',q));
 
   if(orden==='mayor')items.sort((a,b)=>(b.saldo||0)-(a.saldo||0));
   else if(orden==='cliente')items.sort((a,b)=>(a.cliente||'').localeCompare(b.cliente||''));
@@ -10044,7 +10085,7 @@ function renderRegistroAbonos(){
     });
   });
   let filt=rows;
-  if(q)filt=filt.filter(r=>r.cliente.toLowerCase().includes(q));
+  if(q)filt=filt.filter(r=>coincide(r.cliente,q));
   if(mes)filt=filt.filter(r=>(r.fecha||'').startsWith(mes));
   filt.sort((a,b)=>(b.fecha||'').localeCompare(a.fecha||''));
   const totalAb=filt.reduce((a,r)=>a+r.monto,0);
@@ -10570,7 +10611,7 @@ function filtrarItemsCatalogo(overrides){
   return inventario.filter(p=>{
     if(p.combo&&p.combo.colchonId)return false; // tarifas promocionales, no son productos físicos
     if((parseInt(p.stock)||0)<=0)return false; // catálogo solo muestra lo que hay disponible
-    if(q&&!(p.nombre+' '+(p.marca||'')).toLowerCase().includes(q))return false;
+    if(q&&!coincide(p.nombre+' '+(p.marca||'')+' '+(p.cat||''),q))return false;
     if(fm&&p.marca!==fm)return false;
     if(fc&&p.cat!==fc)return false;
     return true;
@@ -10801,6 +10842,16 @@ const renderVentasDeb=debounce(renderVentas,180);
 const renderClientesDeb=debounce(renderClientes,180);
 const renderInvDeb=debounce(renderInv,180);
 
+// El autocompletado de productos (en Nueva Venta, Venta, Cotización, Hermanos y
+// Promociones) recorre todo el inventario y arma HTML con fotos en base64 por cada
+// resultado — hacerlo en cada tecla sin debounce era lo que trababa esos formularios.
+const renderAutocompleteProductoNVDeb=debounce(renderAutocompleteProductoNV,120);
+const renderAutocompleteProductoVTDeb=debounce(renderAutocompleteProductoVT,120);
+const renderAutocompleteProductoHnoDeb=debounce(renderAutocompleteProductoHno,120);
+const renderAutocompleteCotDeb=debounce(renderAutocompleteCot,120);
+const autocompletePromoProdDeb=debounce(autocompletePromoProd,120);
+const autocompleteClienteDeb=debounce(autocompleteCliente,120);
+
 // Exponer todas las funciones al scope global (requerido por type="module")
 Object.assign(window,{
   setTab,openSidebar,closeSidebar,toggleTheme,togglePrivacidad,
@@ -10831,7 +10882,7 @@ Object.assign(window,{
   confirmDialog,formDialog,_resolveConfirm,_resolveFormDialog,_submitFormDialog,
   abrirImportar,handleImportDrop,handleImportSelect,confirmarImport,descargarPlantilla,cargarHojaImport,
   pausarVentaNV,reanudarVentaPausada,eliminarVentaPausada,updPagoNV,recalcMixtoNV,calcDescuentoNV,
-  renderPromociones,autocompletePromoProd,selPromoProd,guardarPromo,eliminarPromo,renderClientes,
+  renderPromociones,autocompletePromoProd,autocompletePromoProdDeb,selPromoProd,guardarPromo,eliminarPromo,renderClientes,
   toggleAdmin,requiereAdmin,
   renderFinanzas,abrirGastoFijo,eliminarGastoFijo,abrirCompra,guardarCompra,eliminarCompra,
   renderCaja,abrirCaja,cerrarCaja,agregarMovimientoCaja,
@@ -10849,7 +10900,7 @@ Object.assign(window,{
   handleFotoProd,quitarFotoProd,soltarFotoProd,pegarFotoProd,verFotoProdVenta,generarCatalogoPDF,generarCatalogoPropio,compartirCatalogoWhatsApp,toggleCamposColchon,
   abrirReposicion,renderReposicion,copiarListaReposicion,exportReposicion,
   imprimirVenta,descargarPedidoHTML,
-  autocompleteCliente,selCliente,solicitarNotificaciones,
+  autocompleteCliente,autocompleteClienteDeb,selCliente,solicitarNotificaciones,
   renderVentasDeb,renderClientesDeb,renderInvDeb,
   renderHermanos,openMovHno,editHermano,saveHermano,delHermano,toggleTipoHno,
   addItemHno,rmItemHno,updItemHno,autocompleteProductoHno,selProdAutoHno,
