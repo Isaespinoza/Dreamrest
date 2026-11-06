@@ -1358,6 +1358,8 @@ async function saveAsistDB(r){await setDoc(doc(db,'asistencia',String(r.id)),r);
 async function delAsistDB(id){await deleteDoc(doc(db,'asistencia',String(id)));}
 async function saveCalcHistDB(h){await setDoc(doc(db,'calcHistorial',String(h.id)),h);}
 async function delCalcHistDB(id){await deleteDoc(doc(db,'calcHistorial',String(id)));}
+async function saveListaPrecioDB(l){await setDoc(doc(db,'listasPrecios',String(l.id)),l);}
+async function delListaPrecioDB(id){await deleteDoc(doc(db,'listasPrecios',String(id)));}
 async function saveCuponDB(c){await setDoc(doc(db,'cupones',String(c.id)),c);}
 async function delCuponDB(id){await deleteDoc(doc(db,'cupones',String(id)));}
 
@@ -1567,6 +1569,8 @@ let asistencia=[];
 let cupones=[];
 let puntosCliente=[];
 let calcHistorial=[];
+// Listas de precios para clientes (Costos de Fábrica → Listas de precios).
+let listasPrecios=[];
 // Config del cupón sorpresa (Sistema 2). Se pisa con lo guardado en config/cupones.
 let cuponesConfig={activo:false,monto:150000,tipoDesc:'$',valor:10000,dias:30};
 
@@ -6137,6 +6141,364 @@ function toggleMostrarNeto(){
 function lineaNeto(precio){
   return mostrarNeto?`<div class="muted" style="font-size:10px;font-weight:400">neto ${fmt(netoDesde(precio))}</div>`:'';
 }
+// ---- Listas de precios para clientes ----
+// Listas armadas a mano para mandarle a un cliente (tiendas, mayoristas). Cada lista guarda
+// sus propios precios: una lista que ya se envió no debe moverse sola si después sube un
+// insumo. Para ponerla al día está "Recalcular", que se aprieta a propósito.
+let lpcEdit=null; // copia de la lista que se está editando; null = viendo el listado
+const LPC_BASES={costo:'Costo + margen',may:'Mayorista del inventario',min:'Minorista del inventario'};
+
+// Todo lo que se puede poner en una lista: cada modelo de la calculadora en cada tamaño, más
+// los colchones a medida que ya están en el inventario.
+function lpcFilasDisponibles(){
+  const filas=[];
+  Object.entries(modelosCalcTodos()).forEach(([mKey,mNom])=>{
+    TAMANOS.forEach(t=>{
+      const prodId=(MAPA_COSTO_PROD[mKey]||{})[t.key];
+      const prod=prodId?inventario.find(p=>String(p.id)===String(prodId)):null;
+      filas.push({k:mKey+'|'+t.key,grupo:mNom,nombre:t.nom||t.key,costo:Math.round(calcularCosto(mKey,t).total),prod});
+    });
+  });
+  colchonesCosteables().filter(x=>x.aMedida).forEach(({prod,modelo,tam,receta})=>{
+    filas.push({k:'prod:'+prod.id,grupo:'Colchones a medida',nombre:prod.nombre,costo:Math.round(costoDeItem({modelo,tam,receta}).total),prod});
+  });
+  return filas;
+}
+// Precio con IVA incluido con que entra una fila, según la base elegida en la lista. Si el
+// producto no tiene ese precio cargado en el inventario, cae a costo + margen.
+function lpcPrecioBase(f,lista){
+  if(lista.base==='may'&&f.prod&&f.prod.may>0)return f.prod.may;
+  if(lista.base==='min'&&f.prod&&f.prod.min>0)return f.prod.min;
+  return f.costo>0?precioSugeridoDesdeCosto(f.costo,parseFloat(lista.margen)||0):0;
+}
+function lpcSumarDias(f,n){
+  const d=new Date((f||today())+'T12:00:00');
+  d.setDate(d.getDate()+(parseInt(n)||0));
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function lpcBuscar(id){return listasPrecios.find(l=>String(l.id)===String(id))}
+
+function lpcNueva(){
+  lpcEdit={id:uid(),nombre:'',cliente:'',notas:'',validezDias:15,base:'costo',margen:margenes.may,iva:'incl',items:[],creada:today()};
+  renderCalculadora();
+}
+function lpcEditar(id){
+  const l=lpcBuscar(id);
+  if(!l)return;
+  lpcEdit=JSON.parse(JSON.stringify(l));
+  renderCalculadora();
+}
+function lpcDuplicar(id){
+  const l=lpcBuscar(id);
+  if(!l)return;
+  lpcEdit=Object.assign(JSON.parse(JSON.stringify(l)),{id:uid(),nombre:(l.nombre||'Lista')+' (copia)',creada:today(),_dirty:true});
+  delete lpcEdit.actualizada;delete lpcEdit.ts;
+  renderCalculadora();
+}
+async function lpcEliminar(id){
+  const l=lpcBuscar(id);
+  if(!l)return;
+  if(!await confirmDialog('¿Eliminar la lista "'+(l.nombre||'sin nombre')+'"? No se puede deshacer.',{okText:'Eliminar',danger:true}))return;
+  try{
+    await delListaPrecioDB(id);
+    listasPrecios=listasPrecios.filter(x=>String(x.id)!==String(id));
+    toast('🗑️ Lista eliminada');
+    renderCalculadora();
+  }catch(e){toast('⚠️ No se pudo eliminar: '+e.message);}
+}
+async function lpcCancelar(){
+  if(lpcEdit&&lpcEdit._dirty&&!await confirmDialog('Tienes cambios sin guardar en esta lista. ¿Salir igual?',{okText:'Salir sin guardar',danger:true}))return;
+  lpcEdit=null;
+  renderCalculadora();
+}
+// Deja los ítems en el orden de la calculadora (modelo y tamaño), con los agregados a mano al final.
+function lpcOrdenar(items){
+  const orden=new Map(lpcFilasDisponibles().map((f,i)=>[f.k,i]));
+  const pos=it=>orden.has(it.k)?orden.get(it.k):(String(it.k).startsWith('libre:')?2e6:1e6);
+  return items.slice().sort((a,b)=>pos(a)-pos(b));
+}
+async function lpcGuardar(){
+  const l=lpcEdit;
+  if(!l)return;
+  l.nombre=String(l.nombre||'').trim();
+  if(!l.nombre){toast('Ponle un nombre a la lista');return;}
+  l.items=lpcOrdenar(l.items.filter(it=>!String(it.k).startsWith('libre:')||String(it.nombre||'').trim()));
+  if(!l.items.length){toast('La lista no tiene productos');return;}
+  const out=JSON.parse(JSON.stringify(l));
+  delete out._dirty;
+  out.actualizada=today();out.ts=Date.now();
+  try{
+    await saveListaPrecioDB(out);
+    const i=listasPrecios.findIndex(x=>String(x.id)===String(out.id));
+    if(i>=0)listasPrecios[i]=out;else listasPrecios.push(out);
+    lpcEdit=null;
+    toast('✅ Lista guardada');
+    renderCalculadora();
+  }catch(e){toast('⚠️ No se pudo guardar: '+e.message);}
+}
+function lpcCampo(campo,val){
+  if(!lpcEdit)return;
+  lpcEdit[campo]=val;
+  lpcEdit._dirty=true;
+  if(campo==='base'||campo==='iva')renderCalculadora();
+}
+function lpcItem(k){return lpcEdit.items.find(it=>it.k===k)}
+function lpcToggle(k){
+  const i=lpcEdit.items.findIndex(it=>it.k===k);
+  if(i>=0)lpcEdit.items.splice(i,1);
+  else{
+    const f=lpcFilasDisponibles().find(x=>x.k===k);
+    if(!f)return;
+    lpcEdit.items.push({k,grupo:f.grupo,nombre:f.nombre,precio:lpcPrecioBase(f,lpcEdit)});
+  }
+  lpcEdit._dirty=true;
+  renderCalculadora();
+}
+function lpcToggleGrupo(grupo,on){
+  lpcFilasDisponibles().filter(f=>f.grupo===grupo).forEach(f=>{
+    const it=lpcItem(f.k);
+    if(on&&!it)lpcEdit.items.push({k:f.k,grupo:f.grupo,nombre:f.nombre,precio:lpcPrecioBase(f,lpcEdit)});
+    if(!on&&it)lpcEdit.items.splice(lpcEdit.items.indexOf(it),1);
+  });
+  lpcEdit._dirty=true;
+  renderCalculadora();
+}
+function lpcPrecio(k,val){
+  const it=lpcItem(k);
+  if(!it)return;
+  it.precio=Math.max(0,Math.round(parseFloat(String(val).replace(/\./g,'').replace(',','.'))||0));
+  // Si la lista se muestra neta, lo que se escribe es el neto: se guarda con IVA como el resto del sistema.
+  if(lpcEdit.iva==='neto')it.precio=Math.round(it.precio*(1+IVA_TASA));
+  lpcEdit._dirty=true;
+  renderCalculadora();
+}
+function lpcAgregarLibre(){
+  lpcEdit.items.push({k:'libre:'+uid(),grupo:'Otros productos',nombre:'',precio:0});
+  lpcEdit._dirty=true;
+  renderCalculadora();
+}
+function lpcNombreLibre(k,val){
+  const it=lpcItem(k);
+  if(it){it.nombre=val;lpcEdit._dirty=true;}
+}
+function lpcQuitar(k){
+  lpcEdit.items=lpcEdit.items.filter(it=>it.k!==k);
+  lpcEdit._dirty=true;
+  renderCalculadora();
+}
+// Vuelve a poner los precios desde la base elegida. Lo agregado a mano no se toca.
+async function lpcRecalcular(){
+  const filas=new Map(lpcFilasDisponibles().map(f=>[f.k,f]));
+  const cambian=lpcEdit.items.filter(it=>filas.has(it.k));
+  if(!cambian.length){toast('Primero marca los colchones de la lista');return;}
+  const base=lpcEdit.base==='costo'?'costo + '+(parseFloat(lpcEdit.margen)||0)+'%':LPC_BASES[lpcEdit.base].toLowerCase();
+  if(!await confirmDialog('Se reemplazan los precios de '+nColchones(cambian.length)+' por '+base+'. Los precios que escribiste a mano en esos colchones se pierden.',{okText:'Recalcular'}))return;
+  cambian.forEach(it=>{it.precio=lpcPrecioBase(filas.get(it.k),lpcEdit)});
+  lpcEdit._dirty=true;
+  renderCalculadora();
+}
+// Precio a mostrar en la lista según cómo se presenta el IVA.
+function lpcMonto(precio,iva){return iva==='neto'?netoDesde(precio):precio}
+function lpcValidaHasta(l){
+  return (parseInt(l.validezDias)||0)>0?lpcSumarDias(l.actualizada||today(),l.validezDias):'';
+}
+function lpcGrupos(items){
+  const g=[];
+  items.forEach(it=>{
+    let b=g.find(x=>x.grupo===it.grupo);
+    if(!b){b={grupo:it.grupo||'Otros productos',items:[]};g.push(b);}
+    b.items.push(it);
+  });
+  return g;
+}
+function lpcDeId(id){return id&&lpcEdit&&String(lpcEdit.id)===String(id)?lpcEdit:(id?lpcBuscar(id):lpcEdit)}
+function lpcTexto(id){
+  const l=lpcDeId(id);
+  if(!l)return '';
+  const items=lpcOrdenar(l.items.filter(it=>String(it.nombre||'').trim()));
+  const vh=lpcValidaHasta(l);
+  let t='*Lista de precios · DreamRest*\n';
+  if(l.cliente)t+='Para: '+l.cliente+'\n';
+  t+=fechaCorta(l.actualizada||today())+(vh?' · válida hasta el '+fechaCorta(vh):'')+'\n';
+  lpcGrupos(items).forEach(g=>{
+    t+='\n*'+g.grupo+'*\n';
+    g.items.forEach(it=>{
+      t+='• '+it.nombre+' — '+montoCLP(lpcMonto(it.precio,l.iva))
+        +(l.iva==='ambos'?' ('+montoCLP(netoDesde(it.precio))+' + IVA)':'')+'\n';
+    });
+  });
+  t+='\n'+(l.iva==='neto'?'_Valores netos, más IVA 19%._':'_Precios con IVA incluido._')+'\n';
+  if(l.notas)t+=l.notas+'\n';
+  return t;
+}
+function lpcCopiar(id){
+  const t=lpcTexto(id);
+  if(!t)return;
+  navigator.clipboard.writeText(t).then(()=>toast('✅ Lista copiada')).catch(()=>toast('No se pudo copiar'));
+}
+function lpcWhatsapp(id){
+  const t=lpcTexto(id);
+  if(t)window.open('https://wa.me/?text='+encodeURIComponent(t),'_blank');
+}
+function lpcImprimir(id){
+  const l=lpcDeId(id);
+  if(!l)return;
+  const items=lpcOrdenar(l.items.filter(it=>String(it.nombre||'').trim()));
+  if(!items.length){toast('La lista no tiene productos');return;}
+  const MC='#a87f3e';
+  const logoSrc=(typeof DR_LOGO_B64!=='undefined'?DR_LOGO_B64:'');
+  const fecha=l.actualizada||today(), vh=lpcValidaHasta(l);
+  const ambos=l.iva==='ambos';
+  const css='@page{size:A4;margin:0}*{box-sizing:border-box;margin:0;padding:0}'
+    +'body{font-family:Helvetica,Arial,sans-serif;color:#1c1e1c;background:#fff}'
+    +'.page{width:210mm;min-height:297mm;padding:14mm 15mm;background:#fff}'
+    +'.hdr{display:flex;justify-content:space-between;align-items:flex-end;padding-bottom:9px;border-bottom:2px solid '+MC+';margin-bottom:12px}'
+    +'.logo-img{height:32px;width:auto;display:block;margin-bottom:3px}'
+    +'.co-name{font-size:15px;font-weight:700}'
+    +'.doc-title{font-size:14px;font-weight:700;color:'+MC+';letter-spacing:.05em;text-align:right}'
+    +'.doc-meta{font-size:10px;color:#6b6f6b;text-align:right;margin-top:2px}'
+    +'.para{font-size:12px;margin-bottom:6px}'
+    +'.cat{font-size:12px;font-weight:700;color:#fff;background:'+MC+';padding:5px 10px;border-radius:6px;margin:12px 0 4px;break-after:avoid;page-break-after:avoid}'
+    +'table{width:100%;border-collapse:collapse;font-size:11.5px}'
+    +'th{font-size:9.5px;color:#6b6f6b;text-transform:uppercase;letter-spacing:.04em;text-align:left;padding:4px 10px;font-weight:600}'
+    +'td{padding:6px 10px;border-bottom:1px solid #e4e8e4}'
+    +'tr{break-inside:avoid;page-break-inside:avoid}'
+    +'.num{text-align:right;white-space:nowrap}'
+    +'.pr{font-weight:700;color:'+MC+'}'
+    +'.notas{font-size:11px;color:#4a4d4a;margin-top:14px;white-space:pre-wrap}'
+    +'.footer{font-size:9.5px;color:#8a8d8a;text-align:center;margin-top:14px;padding-top:8px;border-top:1px solid #e4e8e4}'
+    +'.btnprint{position:fixed;top:10px;right:10px;background:'+MC+';color:#fff;padding:10px 16px;border:none;border-radius:6px;cursor:pointer;font-size:14px;z-index:1000;box-shadow:0 2px 8px rgba(0,0,0,.2)}'
+    +'@media screen{body{background:#e3e5e3;padding:24px 0 60px}.page{margin:0 auto;box-shadow:0 10px 34px rgba(0,0,0,.2)}}'
+    +'@media print{body{padding:0}.page{margin:0}.btnprint{display:none}}';
+  const cabeza='<tr><th>Producto</th>'+(ambos?'<th class="num">Neto</th><th class="num">Con IVA</th>':'<th class="num">'+(l.iva==='neto'?'Neto + IVA':'Precio')+'</th>')+'</tr>';
+  const fila=it=>'<tr><td>'+escHtml(it.nombre)+'</td>'
+    +(ambos?'<td class="num">'+montoCLP(netoDesde(it.precio))+'</td><td class="num pr">'+montoCLP(it.precio)+'</td>'
+           :'<td class="num pr">'+montoCLP(lpcMonto(it.precio,l.iva))+'</td>')+'</tr>';
+  const cuerpo=lpcGrupos(items).map(g=>'<div class="cat">'+escHtml(g.grupo)+'</div><table>'+cabeza+g.items.map(fila).join('')+'</table>').join('');
+  const html='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Lista de precios '+escHtml(l.cliente||l.nombre)+' DreamRest</title><style>'+css+'</style></head><body>'
+    +'<button class="btnprint" onclick="window.print()">🖨️ Imprimir / Guardar PDF</button>'
+    +'<div class="page"><div class="hdr"><div>'
+    +(logoSrc?'<img class="logo-img" src="'+logoSrc+'" alt="DreamRest">':'')
+    +'<div class="co-name">DreamRest</div></div>'
+    +'<div><div class="doc-title">LISTA DE PRECIOS</div>'
+    +'<div class="doc-meta">'+fechaCorta(fecha)+(vh?' · válida hasta el '+fechaCorta(vh):'')+'</div></div></div>'
+    +(l.cliente?'<div class="para">Para: <strong>'+escHtml(l.cliente)+'</strong></div>':'')
+    +cuerpo
+    +(l.notas?'<div class="notas">'+escHtml(l.notas)+'</div>':'')
+    +'<div class="footer">'+(l.iva==='neto'?'Valores netos, más IVA 19%.':ambos?'Valores netos y con IVA 19% incluido.':'Precios con IVA incluido.')
+    +(vh?' Precios válidos hasta el '+fechaCorta(vh)+'.':'')+'</div>'
+    +'</div></body></html>';
+  const url=URL.createObjectURL(new Blob([html],{type:'text/html;charset=utf-8'}));
+  const w=window.open(url,'_blank');
+  if(!w)alert('Activa las ventanas emergentes para poder ver la lista.');
+  setTimeout(()=>URL.revokeObjectURL(url),8000);
+}
+function renderListasPrecios(){
+  if(lpcEdit)return renderListaPrecioEditor();
+  let html=`<div class="help">Arma listas de precios para mandarle a tus clientes: eliges qué colchones van, a qué precio, y la imprimes o la envías por WhatsApp. Cada lista guarda sus precios: si después cambia un costo, la lista no se mueve sola hasta que la recalcules.</div>
+    <button class="btn" style="width:100%;margin-bottom:14px" onclick="lpcNueva()">➕ Nueva lista de precios</button>`;
+  const listas=listasPrecios.slice().sort((a,b)=>(b.ts||0)-(a.ts||0));
+  if(!listas.length)return html+`<div class="muted" style="text-align:center;padding:20px">Todavía no tienes listas guardadas.</div>`;
+  listas.forEach(l=>{
+    const id=escHtml(l.id), vh=lpcValidaHasta(l), vencida=vh&&vh<today();
+    html+=`<div class="card">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
+        <div><h4 style="margin-bottom:2px">${escHtml(l.nombre||'Sin nombre')}</h4>
+          <div class="muted" style="font-size:11px">${l.cliente?'Para '+escHtml(l.cliente)+' · ':''}${(l.items||[]).length} producto${(l.items||[]).length!==1?'s':''} · ${l.iva==='neto'?'netos + IVA':l.iva==='ambos'?'neto y con IVA':'con IVA'} · actualizada el ${fechaCorta(l.actualizada||l.creada)}</div>
+          ${vh?`<div style="font-size:11px;margin-top:2px;color:${vencida?'#dc2626':'#166534'}">${vencida?'Venció':'Válida hasta'} el ${fechaCorta(vh)}</div>`:''}
+        </div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px">
+        <button class="btn btn-sm" data-id="${id}" onclick="lpcEditar(this.dataset.id)">✏️ Editar</button>
+        <button class="btn btn-sec btn-sm" data-id="${id}" onclick="lpcImprimir(this.dataset.id)">🖨️ Imprimir / PDF</button>
+        <button class="btn btn-sec btn-sm" data-id="${id}" onclick="lpcWhatsapp(this.dataset.id)">💬 WhatsApp</button>
+        <button class="btn btn-sec btn-sm" data-id="${id}" onclick="lpcCopiar(this.dataset.id)">📋 Copiar</button>
+        <button class="btn btn-sec btn-sm" data-id="${id}" onclick="lpcDuplicar(this.dataset.id)">📄 Duplicar</button>
+        <button class="btn btn-sec btn-sm" style="color:#dc2626" data-id="${id}" onclick="lpcEliminar(this.dataset.id)">🗑️</button>
+      </div>
+    </div>`;
+  });
+  return html;
+}
+function renderListaPrecioEditor(){
+  const l=lpcEdit, neto=l.iva==='neto';
+  const filas=lpcFilasDisponibles();
+  const enCalc=new Set(filas.map(f=>f.k));
+  const inp=(campo,val,extra)=>`value="${escHtml(val==null?'':val)}" onchange="lpcCampo('${campo}',this.value)" ${extra||''}`;
+  let html=`<div class="section-title" style="font-size:15px">${listasPrecios.some(x=>String(x.id)===String(l.id))?'✏️ Editar lista':'➕ Nueva lista'}</div>
+    <div class="card">
+      <div class="row">
+        <div class="field"><label>Nombre de la lista</label><input type="text" placeholder="Ej: Mayoristas noviembre" ${inp('nombre',l.nombre)}></div>
+        <div class="field"><label>Cliente (opcional)</label><input type="text" placeholder="Ej: Mueblería Los Andes" ${inp('cliente',l.cliente)}></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Válida por (días)</label><input type="number" min="0" ${inp('validezDias',l.validezDias)}></div>
+        <div class="field"><label>Mostrar precios</label><select onchange="lpcCampo('iva',this.value)">
+          <option value="incl" ${l.iva==='incl'?'selected':''}>Con IVA incluido</option>
+          <option value="neto" ${neto?'selected':''}>Netos + IVA</option>
+          <option value="ambos" ${l.iva==='ambos'?'selected':''}>Neto y con IVA</option>
+        </select></div>
+      </div>
+      <div class="field"><label>Notas al pie (opcional)</label><textarea rows="2" placeholder="Ej: Despacho gratis sobre 10 unidades. Pago 50% al confirmar." onchange="lpcCampo('notas',this.value)">${escHtml(l.notas||'')}</textarea></div>
+    </div>
+    <div class="card">
+      <h4 style="margin-bottom:6px">💲 De dónde salen los precios</h4>
+      <div class="row">
+        <div class="field"><label>Base</label><select onchange="lpcCampo('base',this.value)">
+          ${Object.entries(LPC_BASES).map(([k,n])=>`<option value="${k}" ${l.base===k?'selected':''}>${n}</option>`).join('')}
+        </select></div>
+        ${l.base==='costo'?`<div class="field"><label>Margen sobre el costo (%)</label><input type="number" ${inp('margen',l.margen)}></div>`:''}
+      </div>
+      <div class="muted" style="font-size:11px;margin-bottom:10px">Así entra el precio de cada colchón que marques. Después puedes escribir el que quieras en cada fila. ${l.base!=='costo'?'Si un colchón no tiene ese precio en el inventario, entra con costo + margen.':''}</div>
+      <button class="btn btn-sec btn-sm" onclick="lpcRecalcular()">↻ Recalcular los precios de la lista</button>
+    </div>`;
+  const grupos=[];
+  filas.forEach(f=>{let g=grupos.find(x=>x.grupo===f.grupo);if(!g){g={grupo:f.grupo,filas:[]};grupos.push(g);}g.filas.push(f);});
+  grupos.forEach(g=>{
+    const marcados=g.filas.filter(f=>lpcItem(f.k)).length;
+    html+=`<div class="card" style="border-top:3px solid ${marcados?'var(--gold)':'var(--border)'}">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px">
+        <h4 style="margin:0">${escHtml(g.grupo)} <span class="muted" style="font-size:11px;font-weight:400">${marcados} de ${g.filas.length}</span></h4>
+        <button class="btn btn-sec btn-sm" data-g="${escHtml(g.grupo)}" onclick="lpcToggleGrupo(this.dataset.g,${marcados<g.filas.length})">${marcados<g.filas.length?'Marcar todos':'Quitar todos'}</button>
+      </div>
+      <div class="tbl-wrap"><table>
+      <thead><tr><th></th><th>Producto</th><th style="text-align:right">Costo fab.</th><th style="text-align:right">${neto?'Precio neto':'Precio con IVA'}</th><th style="text-align:right">Margen</th></tr></thead><tbody>
+      ${g.filas.map(f=>{
+        const it=lpcItem(f.k);
+        const pct=it&&f.costo>0?Math.round((it.precio-f.costo)/f.costo*100):null;
+        return `<tr style="${it?'':'opacity:.55'}">
+          <td><input type="checkbox" ${it?'checked':''} data-k="${escHtml(f.k)}" onchange="lpcToggle(this.dataset.k)" style="width:18px;height:18px"></td>
+          <td>${escHtml(f.nombre)}</td>
+          <td style="text-align:right">${fmt(f.costo)}</td>
+          <td style="text-align:right">${it?`<input type="number" min="0" value="${lpcMonto(it.precio,l.iva)}" data-k="${escHtml(f.k)}" onchange="lpcPrecio(this.dataset.k,this.value)" style="text-align:right;max-width:120px">${!neto?lineaNeto(it.precio):''}`:'<span class="muted">—</span>'}</td>
+          <td style="text-align:right">${pct!==null?`<strong style="color:${pct>0?'#166534':'#dc2626'}">${pct>0?'+':''}${pct}%</strong>`:''}</td>
+        </tr>`;
+      }).join('')}
+      </tbody></table></div></div>`;
+  });
+  // Lo que se agregó a mano, y lo que estaba en la lista pero ya no existe en la calculadora.
+  const otros=l.items.filter(it=>!enCalc.has(it.k));
+  html+=`<div class="card">
+    <h4 style="margin-bottom:4px">➕ Otros productos</h4>
+    <div class="muted" style="font-size:11px;margin-bottom:10px">Almohadas, bases, despacho o lo que quieras sumar a la lista, con nombre y precio libres.</div>
+    ${otros.map(it=>{
+      const libre=String(it.k).startsWith('libre:');
+      return `<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+        ${libre?`<input type="text" placeholder="Nombre del producto" value="${escHtml(it.nombre)}" data-k="${escHtml(it.k)}" oninput="lpcNombreLibre(this.dataset.k,this.value)" style="flex:1">`
+              :`<span style="flex:1;font-size:12px">${escHtml(it.grupo)} · ${escHtml(it.nombre)} <span class="muted" style="font-size:10px">(ya no está en la calculadora)</span></span>`}
+        <input type="number" min="0" placeholder="${neto?'Neto':'Con IVA'}" value="${lpcMonto(it.precio,l.iva)||''}" data-k="${escHtml(it.k)}" onchange="lpcPrecio(this.dataset.k,this.value)" style="text-align:right;max-width:120px">
+        <button class="btn btn-sec btn-sm" data-k="${escHtml(it.k)}" onclick="lpcQuitar(this.dataset.k)" aria-label="Quitar">✕</button>
+      </div>`;
+    }).join('')}
+    <button class="btn btn-sec btn-sm" onclick="lpcAgregarLibre()">➕ Agregar producto</button>
+  </div>
+  <div style="position:sticky;bottom:0;background:var(--cream2);padding:10px 0;display:flex;flex-wrap:wrap;gap:6px;border-top:1px solid var(--border)">
+    <button class="btn" style="flex:1 1 40%;background:#166534" onclick="lpcGuardar()">💾 Guardar lista (${l.items.length})</button>
+    <button class="btn btn-sec" style="flex:1 1 25%" onclick="lpcImprimir()">🖨️ Vista previa</button>
+    <button class="btn btn-sec" style="flex:1 1 25%" onclick="lpcCancelar()">Cancelar</button>
+  </div>`;
+  return html;
+}
 function renderCalculadora(){
   const cont=document.getElementById('calc-content');
   if(!cont)return;
@@ -6148,6 +6510,7 @@ function renderCalculadora(){
       <button class="btn ${sub==='insumos'?'':'btn-sec'}" style="flex:1 1 45%" onclick="window._calcSub='insumos';renderCalculadora()">🧾 Insumos</button>
       <button class="btn ${sub==='recetas'?'':'btn-sec'}" style="flex:1 1 45%" onclick="window._calcSub='recetas';renderCalculadora()">🧪 Recetas</button>
       <button class="btn ${sub==='crear'?'':'btn-sec'}" style="flex:1 1 45%" onclick="window._calcSub='crear';renderCalculadora()">🛏️ Crear colchón</button>
+      <button class="btn ${sub==='listas'?'':'btn-sec'}" style="flex:1 1 45%" onclick="window._calcSub='listas';renderCalculadora()">📄 Listas de precios</button>
       <button class="btn ${sub==='espuma'?'':'btn-sec'}" style="flex:1 1 45%" onclick="window._calcSub='espuma';renderCalculadora()">🧊 Costear espuma</button>
       <button class="btn ${sub==='historial'?'':'btn-sec'}" style="flex:1 1 45%" onclick="window._calcSub='historial';renderCalculadora()">📈 Historial</button>
     </div>`;
@@ -6337,6 +6700,8 @@ function renderCalculadora(){
     html+=renderRecetas();
   }else if(sub==='crear'){
     html+=renderCrearColchon();
+  }else if(sub==='listas'){
+    html+=renderListasPrecios();
   }else if(sub==='espuma'){
     html+=renderCostearEspuma();
   }else if(sub==='historial'){
@@ -7619,6 +7984,11 @@ async function initFirebase(){
       puntosCliente=snap.docs.map(d=>d.data());
     });
     if(calcHistSnap)calcHistorial=calcHistSnap.docs.map(d=>d.data());
+    // No traba la carga: solo se usan en Costos de Fábrica.
+    if(!MODO_VENDEDORA)leerColeccion('listasPrecios').then(s=>{
+      listasPrecios=s.docs.map(d=>d.data());
+      if(window._calcSub==='listas'&&!lpcEdit)renderCalculadora();
+    });
 
     if(!MODO_VENDEDORA){
       // Cargar gastos fijos y compras
@@ -10868,6 +11238,7 @@ Object.assign(window,{
   setArmadoNV,setRespaldoNV,
   renderInv,renderVentas,renderDespachos,renderResumen,renderInicio,renderNuevaVentaTab,renderVendedores,
   abrirListaPrecios,lpToggleProd,lpToggleCat,lpTodos,lpSetOpt,copiarListaPrecios,imprimirListaPrecios,abrirListaCostos,
+  lpcNueva,lpcEditar,lpcDuplicar,lpcEliminar,lpcCancelar,lpcGuardar,lpcCampo,lpcToggle,lpcToggleGrupo,lpcPrecio,lpcAgregarLibre,lpcNombreLibre,lpcQuitar,lpcRecalcular,lpcCopiar,lpcWhatsapp,lpcImprimir,
   abrirPersonalizarInicio,guardarPersonalizarInicio,restaurarLayoutInicio,
   limpiarFiltrosVentas,cambiarEstado,cambiarEstadoDetalle,registrarAbono,resetearInventario,
   editarAbono,borrarAbono,abrirRegistroAbonos,renderRegistroAbonos,
