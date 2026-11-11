@@ -6146,6 +6146,39 @@ function toggleMostrarNeto(){
 function lineaNeto(precio){
   return mostrarNeto?`<div class="muted" style="font-size:10px;font-weight:400">neto ${fmt(netoDesde(precio))}</div>`:'';
 }
+// ---- Precios de venta editados a mano en Costos y márgenes ----
+// El sugerido sale del costo + margen, pero se puede corregir a mano antes de pasarlo a la
+// venta (redondear a $990, igualar a la competencia...). Lo editado queda en borrador hasta
+// apretar "Pasar estos precios a la venta"; lo que no se toca sigue al sugerido.
+const preciosEditados={}; // { prodId: { may, min } }
+function celdaPrecioEditable(prodId,cual,sug){
+  const color=cual==='may'?'#a87f3e':'#1e40af';
+  if(!prodId)return `<span style="color:${color}">${fmt(sug)}</span>${lineaNeto(sug)}`;
+  const ed=(preciosEditados[prodId]||{})[cual];
+  const val=ed!=null?ed:sug;
+  return `<input type="number" step="100" min="0" value="${val}" data-sug="${sug}" title="Sugerido: ${fmt(sug)}"
+    onchange="setPrecioEditado('${prodId}','${cual}',this)"
+    style="width:110px;text-align:right;padding:4px 6px;color:${color};${ed!=null?'background:#fef9c3;font-weight:700':''}">
+    <div class="pe-neto">${lineaNeto(val)}</div>
+    <div class="pe-sug muted" style="font-size:10px;${ed!=null?'':'display:none'}">sugerido ${fmt(sug)}</div>`;
+}
+function setPrecioEditado(prodId,cual,input){
+  const sug=parseInt(input.dataset.sug)||0;
+  const n=Math.round(parseFloat(String(input.value).replace(/\./g,'').replace(',','.')));
+  if(!preciosEditados[prodId])preciosEditados[prodId]={};
+  // Vacío o igual al sugerido = vuelve a seguir al sugerido.
+  if(!(n>0)||n===sug)delete preciosEditados[prodId][cual];
+  else preciosEditados[prodId][cual]=n;
+  if(!Object.keys(preciosEditados[prodId]).length)delete preciosEditados[prodId];
+  const ed=(preciosEditados[prodId]||{})[cual];
+  const val=ed!=null?ed:sug;
+  input.value=val;
+  input.style.background=ed!=null?'#fef9c3':'';
+  input.style.fontWeight=ed!=null?'700':'';
+  const cel=input.parentNode;
+  cel.querySelector('.pe-neto').innerHTML=lineaNeto(val);
+  cel.querySelector('.pe-sug').style.display=ed!=null?'':'none';
+}
 // ---- Listas de precios para clientes ----
 // Listas armadas a mano para mandarle a un cliente (tiendas, mayoristas). Cada lista guarda
 // sus propios precios: una lista que ya se envió no debe moverse sola si después sube un
@@ -6605,7 +6638,7 @@ function renderCalculadora(){
         <div class="field"><label>Margen objetivo minorista (%)</label><input type="number" id="calc-margen-min" value="${margenes.min}" onchange="setMargen('min',this.value)"></div>
         <div class="field"><label>Margen objetivo mayorista (%)</label><input type="number" id="calc-margen-may" value="${margenes.may}" onchange="setMargen('may',this.value)"></div>
       </div>
-      <div class="muted" style="font-size:11px;margin-bottom:10px">Precio sugerido = costo de fabricación (ya con IVA) × (1 + margen), redondeado a los $100.</div>
+      <div class="muted" style="font-size:11px;margin-bottom:10px">Precio sugerido = costo de fabricación (ya con IVA) × (1 + margen), redondeado a los $100. En la tabla puedes cambiarlo a mano antes de pasarlo a la venta.</div>
       <div style="border-top:1px solid var(--border);padding-top:10px">
         <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;text-transform:none;letter-spacing:normal;font-size:13px;font-weight:400;color:var(--text)">
           <input type="checkbox" ${autoPrecios?'checked':''} onchange="toggleAutoPrecios()" style="width:20px;height:20px;accent-color:#166534;flex:none;margin-top:1px">
@@ -6631,7 +6664,7 @@ function renderCalculadora(){
     Object.entries(modelosCalcTodos()).forEach(([mKey,mNom])=>{
       html+=`<div class="card" style="border-top:3px solid ${esModeloCustom(mKey)?'#166534':'var(--gold)'}"><h4 style="margin-bottom:10px">${escHtml(mNom)}${esModeloCustom(mKey)?' <span class="muted" style="font-size:10px;font-weight:400">modelo a medida</span>':''}</h4>
         <div class="tbl-wrap"><table>
-        <thead><tr><th>Tamaño</th><th style="text-align:right">Costo fab.</th><th style="text-align:right">Precio min. actual</th><th style="text-align:right">Margen actual</th><th style="text-align:right">Sugerido may.</th><th style="text-align:right">Sugerido min.</th></tr></thead><tbody>`;
+        <thead><tr><th>Tamaño</th><th style="text-align:right">Costo fab.</th><th style="text-align:right">Precio min. actual</th><th style="text-align:right">Margen actual</th><th style="text-align:right">Precio may.</th><th style="text-align:right">Precio min.</th></tr></thead><tbody>`;
       TAMANOS.forEach(t=>{
         const r=calcularCosto(mKey,t);
         const costo=Math.round(r.total);
@@ -6645,8 +6678,8 @@ function renderCalculadora(){
           <td style="text-align:right"><strong>${fmt(costo)}</strong></td>
           <td style="text-align:right">${precioMin!==null?fmt(precioMin)+lineaNeto(precioMin):'<span class="muted">—</span>'}</td>
           <td style="text-align:right">${margen!==null?`<strong style="color:${margen>0?'#166534':'#dc2626'}">${margenPct>0?'+':''}${margenPct}% (${margen>0?'+':''}${fmt(margen)})</strong>`:'<span class="muted">—</span>'}</td>
-          <td style="text-align:right;color:#a87f3e">${fmt(sugerido(costo,margenes.may))}${lineaNeto(sugerido(costo,margenes.may))}</td>
-          <td style="text-align:right;color:#1e40af"><strong>${fmt(sugerido(costo,margenes.min))}</strong>${lineaNeto(sugerido(costo,margenes.min))}</td>
+          <td style="text-align:right">${celdaPrecioEditable(prod?String(prodId):null,'may',sugerido(costo,margenes.may))}</td>
+          <td style="text-align:right">${celdaPrecioEditable(prod?String(prodId):null,'min',sugerido(costo,margenes.min))}</td>
         </tr>`;
       });
       html+=`</tbody></table></div></div>`;
@@ -6658,7 +6691,7 @@ function renderCalculadora(){
       html+=`<div class="card" style="border-top:3px solid #166534"><h4 style="margin-bottom:4px">🛏️ Colchones a medida</h4>
         <div class="muted" style="font-size:11px;margin-bottom:10px">Creados desde "Crear colchón". Se recalculan y actualizan igual que los estándar.</div>
         <div class="tbl-wrap"><table>
-        <thead><tr><th>Producto</th><th style="text-align:right">Costo fab.</th><th style="text-align:right">Precio min. actual</th><th style="text-align:right">Margen actual</th><th style="text-align:right">Sugerido may.</th><th style="text-align:right">Sugerido min.</th></tr></thead><tbody>`;
+        <thead><tr><th>Producto</th><th style="text-align:right">Costo fab.</th><th style="text-align:right">Precio min. actual</th><th style="text-align:right">Margen actual</th><th style="text-align:right">Precio may.</th><th style="text-align:right">Precio min.</th></tr></thead><tbody>`;
       aMedida.forEach(({prod,modelo,tam,receta})=>{
         const costo=Math.round(costoDeItem({modelo,tam,receta}).total);
         const precioMin=prod.min!=null?prod.min:null;
@@ -6672,8 +6705,8 @@ function renderCalculadora(){
           <td style="text-align:right"><strong>${fmt(costo)}</strong></td>
           <td style="text-align:right">${precioMin!==null?fmt(precioMin)+lineaNeto(precioMin):'<span class="muted">—</span>'}</td>
           <td style="text-align:right">${margen!==null?`<strong style="color:${margen>0?'#166534':'#dc2626'}">${margenPct>0?'+':''}${margenPct}% (${margen>0?'+':''}${fmt(margen)})</strong>`:'<span class="muted">—</span>'}</td>
-          <td style="text-align:right;color:#a87f3e">${fmt(sugerido(costo,margenes.may))}${lineaNeto(sugerido(costo,margenes.may))}</td>
-          <td style="text-align:right;color:#1e40af"><strong>${fmt(sugerido(costo,margenes.min))}</strong>${lineaNeto(sugerido(costo,margenes.min))}</td>
+          <td style="text-align:right">${celdaPrecioEditable(String(prod.id),'may',sugerido(costo,margenes.may))}</td>
+          <td style="text-align:right">${celdaPrecioEditable(String(prod.id),'min',sugerido(costo,margenes.min))}</td>
         </tr>`;
       });
       html+=`</tbody></table></div></div>`;
@@ -6699,8 +6732,8 @@ function renderCalculadora(){
 
     html+=`<button class="btn" style="width:100%;background:#166534" onclick="aplicarCostosInventario()">📥 Aplicar estos costos al inventario</button>
     <div class="muted" style="font-size:11px;margin:6px 0 14px;text-align:center">Actualiza el campo "costo" de los ${colchonesCosteables().length} colchones DreamRest. Te muestra qué cambia antes de aplicar.</div>
-    <button class="btn" style="width:100%;background:#1e40af" onclick="aplicarPreciosSugeridos()">💰 Aplicar precios sugeridos (mayorista y minorista)</button>
-    <div class="muted" style="font-size:11px;margin-top:6px;text-align:center">Cambia los precios de venta al cliente. Te muestra el detalle antes de confirmar.</div>`;
+    <button class="btn" style="width:100%;background:#1e40af" onclick="aplicarPreciosSugeridos()">💰 Pasar estos precios a la venta (mayorista y minorista)</button>
+    <div class="muted" style="font-size:11px;margin-top:6px;text-align:center">Los precios de las columnas "Precio may." y "Precio min." pasan al inventario y son los que salen al hacer una venta. Puedes escribirlos a mano (quedan en amarillo); los que no toques van con el sugerido. Te muestra el detalle antes de confirmar.</div>`;
   }else if(sub==='recetas'){
     html+=renderRecetas();
   }else if(sub==='crear'){
@@ -7341,12 +7374,15 @@ async function aplicarCostosInventario(){
 }
 
 // Devuelve solo los colchones cuyo precio sugerido difiere del que tienen cargado.
-function calcularCambiosPrecios(){
+// conEditados: usa los precios corregidos a mano en la tabla (el botón). La actualización
+// automática no los usa: esa sigue siempre al costo + margen.
+function calcularCambiosPrecios(conEditados){
   const cambios=[];
   colchonesCosteables().forEach(({prod,aMedida,...it})=>{
     const costo=costoDeItem(it).total;
-    const may=precioSugeridoDesdeCosto(costo,margenes.may);
-    const min=precioSugeridoDesdeCosto(costo,margenes.min);
+    const ed=(conEditados&&preciosEditados[String(prod.id)])||{};
+    const may=ed.may??precioSugeridoDesdeCosto(costo,margenes.may);
+    const min=ed.min??precioSugeridoDesdeCosto(costo,margenes.min);
     if(prod.may===may&&prod.min===min)return;
     cambios.push({prod,may,min,nombre:prod.nombre,aMedida,
       celdas:[celdaCambio(prod.may??null,may),celdaCambio(prod.min??null,min)]});
@@ -7365,16 +7401,18 @@ async function guardarCambiosPrecios(cambios){
 }
 
 async function aplicarPreciosSugeridos(){
-  const cambios=calcularCambiosPrecios();
-  if(!cambios.length){toast('Los precios ya coinciden con los sugeridos.');return;}
+  const cambios=calcularCambiosPrecios(true);
+  if(!cambios.length){toast('Los precios de venta ya son estos, no hay nada que cambiar.');return;}
+  const nEd=cambios.filter(c=>preciosEditados[String(c.prod.id)]).length;
 
-  const html=`<div style="margin-bottom:10px">Se cambiarán los <strong>precios de venta</strong> de ${nColchones(cambios.length)}, con margen mayorista ${margenes.may}% y minorista ${margenes.min}%. Revisa antes de aplicar: esto cambia lo que le cobras al cliente.</div>
+  const html=`<div style="margin-bottom:10px">Se cambiarán los <strong>precios de venta</strong> de ${nColchones(cambios.length)}, con margen mayorista ${margenes.may}% y minorista ${margenes.min}%${nEd?` (${nEd===1?'1 con precio escrito a mano':nEd+' con precios escritos a mano'})`:''}. Son los que aparecen al hacer una venta. Revisa antes de aplicar: esto cambia lo que le cobras al cliente.</div>${autoPrecios&&nEd?'<div style="margin-bottom:10px;color:#a87f3e">Ojo: los precios automáticos están encendidos, así que el próximo cambio de costo o de margen los vuelve a poner en el sugerido.</div>':''}
     ${tablaPrevisualizacion(cambios,['Mayorista','Minorista'])}`;
   if(!(await confirmDialog('',{html,ancho:'620px',danger:true,okText:`Aplicar a ${cambios.length}`})))return;
 
   try{
     await guardarCambiosPrecios(cambios);
-    toast(`✅ Precios actualizados en ${cambios.length} colchones`);
+    cambios.forEach(c=>delete preciosEditados[String(c.prod.id)]);
+    toast(`✅ Precios de venta actualizados en ${nColchones(cambios.length)}`);
   }catch(e){
     alert('No se pudo aplicar: '+e.message+'\nNo se cambió nada.');
   }
@@ -11348,7 +11386,7 @@ Object.assign(window,{
   renderPersonal,faltaRapida,atrasoRapido,toggleActivoEmpleado,
   pagoSetEmpleado,pagoSetMes,
   verLiquidacion,copiarLiquidacion,waLiquidacion,imprimirLiquidacionCtx,imprimirLiquidacionEquipo,
-  renderCalculadora,updInsumoCalc,aplicarCostosInventario,aplicarPreciosSugeridos,guardarConfigCalculadora,restaurarInsumosDefault,
+  renderCalculadora,updInsumoCalc,aplicarCostosInventario,aplicarPreciosSugeridos,setPrecioEditado,guardarConfigCalculadora,restaurarInsumosDefault,
   restaurarRecetasDefault,eliminarHistorialCalc,setMargen,toggleAutoPrecios,toggleMostrarNeto,
   capaSet,capaAdd,capaDel,capaMover,recetaSet,eliminarModeloCustom,setIvaInsumo,
   updCrearColchon,plantillaCrear,limpiarCrearColchon,guardarComoModelo,crearProductoDesdeCalculadora,updCostearEspuma,
