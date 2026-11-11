@@ -1,0 +1,23 @@
+rules_version = '2';
+// Reglas de seguridad de la base de DreamRest (Firestore).
+// Se pegan en: Firebase > Firestore Database > Reglas > Publicar.
+// IMPORTANTE: publicarlas recién DESPUÉS de crear los usuarios y probar que el login funciona.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Solo estos correos pueden leer y escribir. Para agregar a alguien:
+    // 1) crear su usuario en Firebase > Authentication > Usuarios
+    // 2) agregar su correo a esta lista y volver a publicar.
+    function esEquipo() {
+      return request.auth != null
+        && request.auth.token.email in [
+          'CORREO_ISAIAS',
+          'CORREO_TIENDA'
+        ];
+    }
+
+    match /{document=**} {
+      allow read, write: if esEquipo();
+    }
+  }
+}
