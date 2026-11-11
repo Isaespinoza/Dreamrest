@@ -6146,6 +6146,23 @@ function toggleMostrarNeto(){
 function lineaNeto(precio){
   return mostrarNeto?`<div class="muted" style="font-size:10px;font-weight:400">neto ${fmt(netoDesde(precio))}</div>`:'';
 }
+// Precio y ganancia que tiene hoy cargados el colchón, mayorista arriba y minorista abajo.
+const ETQ_PRECIO={may:'May',min:'Min'};
+function celdaPreciosActuales(prod){
+  return ['may','min'].map(k=>{
+    const v=prod?prod[k]:null;
+    return `<div style="white-space:nowrap"><span class="muted" style="font-size:10px">${ETQ_PRECIO[k]}</span> ${v!=null?fmt(v):'<span class="muted">—</span>'}</div>${v!=null?lineaNeto(v):''}`;
+  }).join('');
+}
+function celdaGananciaActual(prod,costo){
+  return ['may','min'].map(k=>{
+    const v=prod?prod[k]:null;
+    if(v==null||!(v>0))return `<div><span class="muted" style="font-size:10px">${ETQ_PRECIO[k]}</span> <span class="muted">—</span></div>`;
+    const g=v-costo;
+    const pct=costo>0?Math.round(g/costo*100):0;
+    return `<div style="white-space:nowrap"><span class="muted" style="font-size:10px">${ETQ_PRECIO[k]}</span> <strong style="color:${g>0?'#166534':'#dc2626'}">${g>0?'+':''}${fmt(g)} (${pct>0?'+':''}${pct}%)</strong></div>`;
+  }).join('');
+}
 // ---- Precios de venta editados a mano en Costos y márgenes ----
 // El sugerido sale del costo + margen, pero se puede corregir a mano antes de pasarlo a la
 // venta (redondear a $990, igualar a la competencia...). Lo editado queda en borrador hasta
@@ -6632,7 +6649,7 @@ function renderCalculadora(){
     html+=`<button class="btn btn-sec" style="width:100%" onclick="restaurarInsumosDefault()">↩️ Restaurar valores originales</button>`;
   }else if(sub==='costos'){
     // Tabla de costos
-    html+=`<div class="help">Costo de fabricación con IVA según tus insumos actuales. Define el margen que quieres ganar y te calcula el precio de venta sugerido — compáralo con el precio minorista que ya tienes cargado.</div>
+    html+=`<div class="help">Costo de fabricación con IVA según tus insumos actuales. Define el margen que quieres ganar y te calcula el precio de venta sugerido — compáralo con lo que ganas hoy, como mayorista y como minorista.</div>
     <div class="card">
       <div class="row">
         <div class="field"><label>Margen objetivo minorista (%)</label><input type="number" id="calc-margen-min" value="${margenes.min}" onchange="setMargen('min',this.value)"></div>
@@ -6664,20 +6681,17 @@ function renderCalculadora(){
     Object.entries(modelosCalcTodos()).forEach(([mKey,mNom])=>{
       html+=`<div class="card" style="border-top:3px solid ${esModeloCustom(mKey)?'#166534':'var(--gold)'}"><h4 style="margin-bottom:10px">${escHtml(mNom)}${esModeloCustom(mKey)?' <span class="muted" style="font-size:10px;font-weight:400">modelo a medida</span>':''}</h4>
         <div class="tbl-wrap"><table>
-        <thead><tr><th>Tamaño</th><th style="text-align:right">Costo fab.</th><th style="text-align:right">Precio min. actual</th><th style="text-align:right">Margen actual</th><th style="text-align:right">Precio may.</th><th style="text-align:right">Precio min.</th></tr></thead><tbody>`;
+        <thead><tr><th>Tamaño</th><th style="text-align:right">Costo fab.</th><th style="text-align:right">Precio actual</th><th style="text-align:right">Ganancia actual</th><th style="text-align:right">Precio may.</th><th style="text-align:right">Precio min.</th></tr></thead><tbody>`;
       TAMANOS.forEach(t=>{
         const r=calcularCosto(mKey,t);
         const costo=Math.round(r.total);
         const prodId=(MAPA_COSTO_PROD[mKey]||{})[t.key];
         const prod=prodId?inventario.find(p=>String(p.id)===String(prodId)):null;
-        const precioMin=prod?prod.min:null;
-        const margen=precioMin!==null?precioMin-costo:null;
-        const margenPct=(precioMin!==null&&costo>0)?Math.round((precioMin-costo)/costo*100):null;
         html+=`<tr>
           <td>${t.nom||t.key}</td>
           <td style="text-align:right"><strong>${fmt(costo)}</strong></td>
-          <td style="text-align:right">${precioMin!==null?fmt(precioMin)+lineaNeto(precioMin):'<span class="muted">—</span>'}</td>
-          <td style="text-align:right">${margen!==null?`<strong style="color:${margen>0?'#166534':'#dc2626'}">${margenPct>0?'+':''}${margenPct}% (${margen>0?'+':''}${fmt(margen)})</strong>`:'<span class="muted">—</span>'}</td>
+          <td style="text-align:right">${celdaPreciosActuales(prod)}</td>
+          <td style="text-align:right">${celdaGananciaActual(prod,costo)}</td>
           <td style="text-align:right">${celdaPrecioEditable(prod?String(prodId):null,'may',sugerido(costo,margenes.may))}</td>
           <td style="text-align:right">${celdaPrecioEditable(prod?String(prodId):null,'min',sugerido(costo,margenes.min))}</td>
         </tr>`;
@@ -6691,20 +6705,17 @@ function renderCalculadora(){
       html+=`<div class="card" style="border-top:3px solid #166534"><h4 style="margin-bottom:4px">🛏️ Colchones a medida</h4>
         <div class="muted" style="font-size:11px;margin-bottom:10px">Creados desde "Crear colchón". Se recalculan y actualizan igual que los estándar.</div>
         <div class="tbl-wrap"><table>
-        <thead><tr><th>Producto</th><th style="text-align:right">Costo fab.</th><th style="text-align:right">Precio min. actual</th><th style="text-align:right">Margen actual</th><th style="text-align:right">Precio may.</th><th style="text-align:right">Precio min.</th></tr></thead><tbody>`;
+        <thead><tr><th>Producto</th><th style="text-align:right">Costo fab.</th><th style="text-align:right">Precio actual</th><th style="text-align:right">Ganancia actual</th><th style="text-align:right">Precio may.</th><th style="text-align:right">Precio min.</th></tr></thead><tbody>`;
       aMedida.forEach(({prod,modelo,tam,receta})=>{
         const costo=Math.round(costoDeItem({modelo,tam,receta}).total);
-        const precioMin=prod.min!=null?prod.min:null;
-        const margen=precioMin!==null?precioMin-costo:null;
-        const margenPct=(precioMin!==null&&costo>0)?Math.round((precioMin-costo)/costo*100):null;
         const desc=modelo==='aMedida'
           ? `receta propia · ${(receta.capas||[]).length} capa${(receta.capas||[]).length!==1?'s':''}`
           : nombreModelo(modelo);
         html+=`<tr>
           <td>${escHtml(prod.nombre)}<div class="muted" style="font-size:10px">${escHtml(desc)} · ${tam.ancho}×${tam.largo}</div></td>
           <td style="text-align:right"><strong>${fmt(costo)}</strong></td>
-          <td style="text-align:right">${precioMin!==null?fmt(precioMin)+lineaNeto(precioMin):'<span class="muted">—</span>'}</td>
-          <td style="text-align:right">${margen!==null?`<strong style="color:${margen>0?'#166534':'#dc2626'}">${margenPct>0?'+':''}${margenPct}% (${margen>0?'+':''}${fmt(margen)})</strong>`:'<span class="muted">—</span>'}</td>
+          <td style="text-align:right">${celdaPreciosActuales(prod)}</td>
+          <td style="text-align:right">${celdaGananciaActual(prod,costo)}</td>
           <td style="text-align:right">${celdaPrecioEditable(String(prod.id),'may',sugerido(costo,margenes.may))}</td>
           <td style="text-align:right">${celdaPrecioEditable(String(prod.id),'min',sugerido(costo,margenes.min))}</td>
         </tr>`;
